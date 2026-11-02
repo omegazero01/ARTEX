@@ -106,6 +106,7 @@ import type {
   UsageStats,
   WorkspaceFile,
   WorkspaceListing,
+  TaskNotificationSummary,
 } from "@/lib/types";
 
 function getToken(): string | null {
@@ -1313,6 +1314,11 @@ export const api = {
   // 后端对 GitHub 的查询结果有 30 分钟缓存（未认证的 GitHub API 是 60 次/小时/IP，
   // 顶栏每次整页加载都会查一次，不缓存会很快耗光配额）。force=true 强制回源，
   // 留给用户显式点「检查更新」时用。
+  // 未读角标：queries 里每个任务带自己的快照游标（空串=首次访问，返回基线）。
+  // 只读接口，不写库；服务端一次 SQL 批量返回整页计数。
+  taskNotifications: (queries: { task_id: string; findings: string }[]) =>
+    get<TaskNotificationSummary>(`/tasks/notifications?queries=${encodeURIComponent(JSON.stringify(queries))}`),
+
   checkUpdate: (force = false) => get<UpdateCheck>(`/update/check${force ? "?force=1" : ""}`),
   // 202 即返回，实际下载在后台跑，进度走 /api/update/stream。
   applyUpdate: () => post<{ ok: boolean; target: string }>(`/update/apply`),

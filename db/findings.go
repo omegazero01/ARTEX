@@ -20,18 +20,18 @@ type DBFinding struct {
 	ReportEvidenceVersion int64
 	TrafficBindings       []FindingTrafficBinding // populated only for export
 
-	ID              int64
-	TaskID          *int64
-	NodeID          *int64
-	VulnClass       string
-	Name            string // 漏洞名称(可读标题);为空时前端回退展示 VulnClass
-	Severity        string
-	Summary         string
-	Evidence        string
-	Worker          string
-	AssetIDs        []int64
-	Status          string
-	Report          string // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
+	ID        int64
+	TaskID    *int64
+	NodeID    *int64
+	VulnClass string
+	Name      string // 漏洞名称(可读标题);为空时前端回退展示 VulnClass
+	Severity  string
+	Summary   string
+	Evidence  string
+	Worker    string
+	AssetIDs  []int64
+	Status    string
+	Report    string // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
 	// ReportDetail 保存完整技术明细(含 <!-- SERIES:TECHNICAL --> 注释块),供内部
 	// 检索与复盘;导出与 UI 只用 Report(人类提交版)。
 	ReportDetail    string
@@ -96,8 +96,8 @@ func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary
 	}
 	var id int64
 	err := d.QueryRow(
-		`INSERT INTO findings (task_id, node_id, vulnclass, name, severity, summary, evidence, worker, asset_ids)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		`INSERT INTO findings (task_id, node_id, vulnclass, name, severity, summary, evidence, worker, asset_ids, notification_xid)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, pg_current_xact_id()) RETURNING id`,
 		tid, nid, vulnclass, name, severity, summary, evidence, worker, string(aidsJSON),
 	).Scan(&id)
 	return id, err

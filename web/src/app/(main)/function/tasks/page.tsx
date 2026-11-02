@@ -46,6 +46,7 @@ import { toast } from "sonner";
 
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
 import { StatusBadge } from "@/components/status-badge";
+import { useTaskUnread } from "@/hooks/use-task-unread";
 import { TablePagination } from "@/components/table-pagination";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { TaskTemplateControls } from "@/components/task-template-controls";
@@ -423,6 +424,8 @@ export default function TasksPage() {
   }, []);
 
   const pageIds = React.useMemo(() => paginated.map((t) => t.id), [paginated]);
+  // 未读漏洞角标：只统计当前页任务，轮询走 30s + 页面可见时；不写库。
+  const { counts: unreadCounts, markRead } = useTaskUnread(pageIds);
   const pageSelectedCount = React.useMemo(
     () => pageIds.filter((id) => selectedIds.has(id)).length,
     [pageIds, selectedIds],
@@ -991,6 +994,8 @@ export default function TasksPage() {
                       onArchive={queueTaskArchive}
                       selected={selectedIds.has(task.id)}
                       onSelectedChange={toggleSelected}
+                      unread={unreadCounts[task.id] ?? 0}
+                      onOpen={markRead}
                     />
                   ))}
                 </TableBody>
@@ -1166,8 +1171,12 @@ const TaskRow = React.memo(function TaskRow({
   onArchive,
   selected,
   onSelectedChange,
+  unread,
+  onOpen,
 }: {
   task: Task;
+  unread: number;
+  onOpen: (id: string) => void;
   nowSec: number;
   onDelete: (id: string, options: DeleteTaskOptions) => Promise<void>;
   onControl: (id: string, action: "pause" | "resume") => Promise<void>;
@@ -1192,6 +1201,15 @@ const TaskRow = React.memo(function TaskRow({
       <TableCell className="font-medium">
         <div className="flex max-w-xs items-center gap-2">
           <TaskNameEditor task={task} onRename={onRename} />
+          {unread > 0 && (
+            <Badge
+              variant="destructive"
+              className="shrink-0 text-[10px] tabular-nums"
+              title={`${unread} 条新漏洞（打开任务后清零）`}
+            >
+              {unread} 条新漏洞
+            </Badge>
+          )}
           {task.active && <StarIcon className="size-4 shrink-0 fill-amber-400 text-amber-400" />}
           {taskIsPinned(task) && <PinIcon className="text-primary size-4 shrink-0" aria-label="已置顶" />}
         </div>
@@ -1199,6 +1217,7 @@ const TaskRow = React.memo(function TaskRow({
       <TableCell className="text-muted-foreground max-w-40">
         <Link
           href={`/function/tasks/detail?id=${encodeURIComponent(task.id)}`}
+          onClick={() => onOpen(task.id)}
           className="block truncate rounded-sm hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           title={task.description}
         >

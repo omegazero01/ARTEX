@@ -1637,3 +1637,16 @@ export interface InterceptExecution {
   seq: number;
   items: Activity[];
 }
+
+// 任务未读角标：服务端按 PostgreSQL 可见性快照统计“你上次看之后新增的漏洞数”。
+// ARTEX 只统计 findings；SERIES 还有新资产与待审批项，但那依赖审批体系（ARTEX 无）。
+export interface TaskNotificationCounts {
+  task_id: string;
+  findings: number;
+}
+
+export interface TaskNotificationSummary {
+  snapshot: string;
+  observed_at: number;
+  items: TaskNotificationCounts[];
+}
