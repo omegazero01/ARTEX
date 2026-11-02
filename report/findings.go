@@ -140,6 +140,73 @@ func FindingFilename(f *db.DBFinding) string {
 	return name + ".md"
 }
 
+// FindingReportTitle 提取提交报告里的“漏洞名称”字段。
+// 不能用 findingTitle：那通常是 worker 生成的长标题，提交报告里才是归纳后的标题。
+func FindingReportTitle(f *db.DBFinding) string {
+	if f == nil {
+		return ""
+	}
+	for _, line := range strings.Split(strings.TrimSpace(f.Report), "\n") {
+		line = strings.TrimSpace(line)
+		const prefix = "**漏洞名称：**"
+		if strings.HasPrefix(line, prefix) {
+			if title := strings.TrimSpace(strings.TrimPrefix(line, prefix)); title != "" {
+				return title
+			}
+		}
+	}
+	return findingTitle(f)
+}
+
+// FindingReportFilename 为提交版导出生成安全的 .md 文件名（取报告标题）。
+func FindingReportFilename(f *db.DBFinding) string {
+	if f == nil {
+		return "finding.md"
+	}
+	title := FindingReportTitle(f)
+	name := unsafeFilenameChars.ReplaceAllString(title, "_")
+	name = strings.Trim(name, "._")
+	if name == "" {
+		name = fmt.Sprintf("finding_%d", f.ID)
+	}
+	if len([]rune(name)) > 100 {
+		name = string([]rune(name)[:100])
+	}
+	return name + ".md"
+}
+
+// SingleFindingReportMarkdown 只渲染人读的提交报告，不追加证据与技术明细。
+func SingleFindingReportMarkdown(f *db.DBFinding) string {
+	if f == nil {
+		return ""
+	}
+	report := strings.TrimSpace(f.Report)
+	if report == "" {
+		return ""
+	}
+	return report + "\n"
+}
+
+// FindingsReportMarkdown 把多条提交报告拼成一份 .md（用于 md-single 导出）。
+func FindingsReportMarkdown(fs []*db.DBFinding) string {
+	items := append([]*db.DBFinding(nil), fs...)
+	sortFindingsForExport(items)
+	var b strings.Builder
+	written := 0
+	for _, f := range items {
+		body := SingleFindingReportMarkdown(f)
+		if body == "" {
+			continue // 空报告不占位置，避免出现只有分隔线的空段
+		}
+		if written > 0 {
+			b.WriteString("\n---\n\n")
+		}
+		b.WriteString(body)
+		written++
+	}
+	return b.String()
+}
+
 // FindingsCSV 把一批 findings 渲染成 CSV(带 UTF-8 BOM,便于 Excel 正确识别中文)。
 // 不含大段 report/evidence 全文,只放摘要类字段;需要全文用 Markdown/JSON 导出。
 func FindingsCSV(fs []*db.DBFinding) []byte {

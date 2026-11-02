@@ -539,6 +539,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.reseedWorkerPrompt()            // worker 提示词:加否定结论证据门槛(一次性)
 	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
+	s.reseedReporterPrompt()          // reporter 提示词升级为固定 SRC 报告模板(一次性)
 	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
@@ -955,4 +956,36 @@ func (s *Server) seedAutoDefaultBindings() {
 		return
 	}
 	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// reseedReporterPrompt 把 reporter 提示词升级为固定 SRC 报告模板（一次性）。
+// 只升级精确命中旧默认的提示词；用户改过的保留自定义内容。
+func (s *Server) reseedReporterPrompt() {
+	const flag = "reporter_prompt_src_template_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	defer func() { _ = s.m.pg.SetSetting(flag, "true") }()
+	a, err := s.m.pg.GetAgentByKey("reporter")
+	if err != nil || a == nil {
+		return
+	}
+	tmpl := agent.ReporterDefaultPrompt
+	cur, err := s.m.pg.CurrentPrompt(a.ID)
+	if err != nil {
+		log.Printf("[reporter] 读取当前提示词失败: %v", err)
+		return
+	}
+	if cur == tmpl {
+		return
+	}
+	if !agent.IsLegacyReporterPrompt(cur) {
+		log.Printf("[reporter] 当前提示词已被用户修改，保留自定义内容，不自动覆盖")
+		return
+	}
+	if _, err := s.m.pg.ResetPromptToDefault(a.ID, tmpl); err != nil {
+		log.Printf("[reporter] 提示词升级为固定报告模板失败: %v", err)
+		return
+	}
+	log.Printf("[reporter] 提示词已升级为固定 SRC 报告模板(旧版本保留)")
 }
