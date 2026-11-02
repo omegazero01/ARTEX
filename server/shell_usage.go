@@ -6,6 +6,7 @@ import (
 	"log"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -29,6 +30,15 @@ func shellPathAbs(p string) bool {
 
 func shellPathBase(p string) string {
 	return path.Base(shellPathClean(p))
+}
+
+// shellFold matches Windows' case-insensitive command lookup. POSIX command names
+// stay case-sensitive, so this is a no-op unless the process runs on Windows.
+func shellFold(s string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(s)
+	}
+	return s
 }
 
 // Counts submitted command requests, not processes or iterations. Never expands
@@ -172,25 +182,25 @@ func shellUsageKeys(command string, rows []*db.Tool, agentKey string, configRoot
 func shellCommandMatches(cmd string, row *db.Tool, configRoot string) bool {
 	target := row.ShellCommand()
 	if shellPathAbs(target) {
-		return shellPathAbs(cmd) && shellPathClean(target) == shellPathClean(cmd)
+		return shellPathAbs(cmd) && shellFold(shellPathClean(target)) == shellFold(shellPathClean(cmd))
 	}
 	if strings.ContainsAny(target, "/\\") {
 		return false
 	}
-	if cmd == target {
+	if shellFold(cmd) == shellFold(target) {
 		return true
 	}
 	if !shellPathAbs(cmd) {
-		return strings.TrimSpace(row.Directory) == "" && shellPathBase(cmd) == target
+		return strings.TrimSpace(row.Directory) == "" && shellFold(shellPathBase(cmd)) == shellFold(target)
 	}
 	directory := strings.TrimSpace(row.Directory)
 	if directory == "" {
-		return shellPathBase(cmd) == target
+		return shellFold(shellPathBase(cmd)) == shellFold(target)
 	}
 	if !shellPathAbs(directory) && shellPathAbs(configRoot) {
 		directory = path.Join(shellPathClean(configRoot), directory)
 	}
-	return shellPathAbs(directory) && path.Join(shellPathClean(directory), target) == shellPathClean(cmd)
+	return shellPathAbs(directory) && shellFold(path.Join(shellPathClean(directory), target)) == shellFold(shellPathClean(cmd))
 }
 
 type shellMeteredTool struct {

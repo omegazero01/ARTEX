@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -96,6 +97,33 @@ func TestShellUsageDirectoryAttribution(t *testing.T) {
 	}
 }
 
+// Windows resolves command names case-insensitively; POSIX does not. The fold is
+// platform-scoped so the Linux contract (distinct /usr/bin/Curl) is preserved.
+func TestShellUsageCaseFolding(t *testing.T) {
+	rows := []*db.Tool{
+		{Key: "curl_bare", Executable: "curl.exe", Kind: "shell", Enabled: true, Agents: []string{"worker"}},
+		{Key: "curl_path", Executable: "/opt/bin/curl", Kind: "shell", Enabled: true, Agents: []string{"worker"}},
+	}
+	for _, tt := range []struct {
+		name, command string
+		want          []string
+	}{
+		{"bare name", "CURL.EXE --version", []string{"curl_bare"}},
+		{"absolute path", "/opt/bin/CURL --version", []string{"curl_path"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _ := shellUsageKeys(tt.command, rows, "worker")
+			want := tt.want
+			if runtime.GOOS != "windows" {
+				want = nil
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got %v want %v on %s", got, want, runtime.GOOS)
+			}
+		})
+	}
+}
+
 func TestShellUsageMeterAndFailure(t *testing.T) {
 	recorder := &recordingToolUsage{}
 	base := actool.Build(actool.Spec{Name: "Bash", Run: func(context.Context, json.RawMessage, *actool.ToolContext) (actool.Result, error) {
@@ -150,7 +178,7 @@ func TestShellUsagePersistedAttribution(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = d.Exec(`DELETE FROM tool_usage WHERE tool_key=$1 OR session_id=$2`, key, sessionID)
 		_ = d.DeleteCustomTool(key)
-	_, _ = d.Exec(`DELETE FROM tool_usage WHERE tool_key=$1 OR session_id=$2`, key, sessionID)
+		_, _ = d.Exec(`DELETE FROM tool_usage WHERE tool_key=$1 OR session_id=$2`, key, sessionID)
 	})
 	_ = d.DeleteCustomTool(key)
 	declaration := &db.Tool{Key: key, Executable: "gogo_linux_amd64", Directory: "/root/pentestools", UsageHelp: "gogo -i target", WhenToUse: "端口扫描", Kind: "shell", Enabled: true, Agents: []string{"worker"}}
