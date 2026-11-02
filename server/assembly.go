@@ -296,8 +296,15 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 				shellHints = append(shellHints, "- "+row.Key+": "+row.Description)
 			}
 		}
+		// Bash description addenda: the host execution-environment note is always
+		// attached (on Windows it explains that commands actually run through
+		// PowerShell); user-defined kind="shell" declarations are appended when
+		// present.
+		note := agent.HostEnvironmentNote()
 		if len(shellHints) > 0 {
-			note := "\n\n以下工具已安装在此 bash 环境中，可直接通过 Bash 调用：\n" + strings.Join(shellHints, "\n")
+			note += "\n\n以下工具已安装在此 bash 环境中，可直接通过 Bash 调用：\n" + strings.Join(shellHints, "\n")
+		}
+		if note != "" {
 			for i, t := range out {
 				if t.Name() == "Bash" {
 					out[i] = agent.DecorateTool(t, t.Description()+note, t.InputSchema())
