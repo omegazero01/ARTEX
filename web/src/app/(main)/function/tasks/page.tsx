@@ -1203,11 +1203,12 @@ const TaskRow = React.memo(function TaskRow({
           <TaskNameEditor task={task} onRename={onRename} />
           {unread > 0 && (
             <Badge
-              variant="destructive"
-              className="shrink-0 text-[10px] tabular-nums"
+              variant="notification"
+              className="ml-1 min-w-5 shrink-0"
+              aria-label={`新漏洞，${unread} 条未读`}
               title={`${unread} 条新漏洞（打开任务后清零）`}
             >
-              {unread} 条新漏洞
+              {unread > 99 ? "99+" : unread}
             </Badge>
           )}
           {task.active && <StarIcon className="size-4 shrink-0 fill-amber-400 text-amber-400" />}
