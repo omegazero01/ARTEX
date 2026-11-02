@@ -205,7 +205,9 @@ VALUES(?,?,?,?,?,?,?)`, item.ID, item.ReqHead, item.ReqBody, nullIfEmpty(item.Re
 			if err := tx.QueryRow(`SELECT rowid FROM exchanges WHERE id=?`, item.ID).Scan(&rowID); err != nil {
 				return imported, err
 			}
-			content := strings.Join([]string{item.URL, item.ReqHead, string(item.ReqBody), item.RespHead, string(item.RespBody)}, "\n")
+			reqIndex := decodeHTTPBody(item.ReqHead, item.ReqBody)
+			respIndex := decodeHTTPBody(item.RespHead, item.RespBody)
+			content := strings.Join([]string{item.URL, item.ReqHead, string(reqIndex), item.RespHead, string(respIndex)}, "\n")
 			if _, err := tx.Exec(`INSERT INTO ex_fts(rowid,content) VALUES(?,?)`, rowID, content); err != nil {
 				return imported, err
 			}
