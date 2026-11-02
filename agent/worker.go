@@ -15,6 +15,7 @@ import (
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
+	"github.com/Autumn-27/norma/memory"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
@@ -53,7 +54,10 @@ type WebSearchOpts struct {
 
 type Worker struct {
 	findingRecorder FindingRecorder
-	prov            llm.Provider
+	// mem, when set, exposes the long-term memory directory as worker tools and
+	// appends the usage hint to the system prompt. nil = memory off.
+	mem  *memory.Store
+	prov llm.Provider
 	model           string
 	workDir         string
 	proxyAddr       string
@@ -137,6 +141,9 @@ func (w *Worker) maxTokens() int {
 // SetConstraintInject wires a resolver deciding whether this task's operation
 // constraints get injected into the worker system prompt. nil = inject (default).
 func (w *Worker) SetConstraintInject(fn func() bool) { w.injectConstraints = fn }
+
+// SetMemory enables the long-term memory tools. Passing nil keeps them off.
+func (w *Worker) SetMemory(m *memory.Store) { w.mem = m }
 
 // wantConstraints reports whether constraint injection is enabled (default yes).
 func (w *Worker) wantConstraints() bool { return w.injectConstraints == nil || w.injectConstraints() }
@@ -380,6 +387,12 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts), IntentID: intent.ID})
 	tools, def, cleanup := AugmentTools(ctx, "worker", base)
 	defer cleanup()
+	if w.mem != nil {
+		// Memory catalogue/search/read/save: norma's RecallMemory is English-token
+		// only and the MEMORY.md index is not injected, so the worker otherwise
+		// cannot discover Chinese-titled or non-keyword memories.
+		tools = append(tools, memoryCatalogTools(w.mem)...)
+	}
 
 	// 意图是 worker 的【唯一职责、贯穿整个 run 的不变量】→ 连同启动指令、意图锚定的目标资产
 	// 原始数据一起放进 system prompt：system 每次 run 都重新拼一遍、绝不会被 compaction 压掉，
@@ -394,6 +407,9 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
 	overview := renderWorkerGraphOverview(tsx.graphOverviewData())
 	sysBody := workerSystem(w.proxyAddr, w.proxyCACert, w.workDir, runDir)
+	if w.mem != nil {
+		sysBody += memoryUsageHint
+	}
 	if w.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,worker 执行时严格遵守
 	}
