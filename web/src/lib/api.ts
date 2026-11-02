@@ -61,8 +61,10 @@ import type {
   LLMRetryOverride,
   LLMRetryPolicy,
   LLMTask,
+  MCPCall,
   MCPServer,
   MCPTool,
+  MCPUsageStat,
   MissingSkill,
   ModelTokenStat,
   NotificationChannel,
@@ -1106,6 +1108,8 @@ export const api = {
   saveMcpServer: (m: Partial<MCPServer>) => post<{ id: number }>("/mcp", m),
   deleteMcpServer: (id: number) => del<{ deleted: number }>(`/mcp/${id}`),
   mcpTools: (id: number) => get<{ tools: MCPTool[] }>(`/mcp/${id}/tools`).then((r) => arr(r.tools)),
+  mcpUsage: (id: number, limit = 50) =>
+    get<{ stats: MCPUsageStat[]; calls: MCPCall[] }>(`/mcp/${id}/usage?limit=${limit}`),
   refreshMcpServer: (id: number) => post<{ tools: MCPTool[] }>(`/mcp/${id}/refresh`, {}).then((r) => arr(r.tools)),
 
   // ---- 资产同步 (ScopeSentry 数据源) ----

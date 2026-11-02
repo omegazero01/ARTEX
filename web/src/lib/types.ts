@@ -1180,11 +1180,37 @@ export interface MCPServer {
   enabled: boolean;
   insecure?: boolean; // http: skip TLS cert verification (self-signed servers)
   tools?: string[]; // mcp_tools_cache (names only, for the count)
+  // Usage ledger (mcp_usage): attribution only, no arguments or results.
+  calls?: number;
+  tasks?: number;
+  usage_agents?: string[];
+  last_used?: string;
 }
 
 export interface MCPTool {
   name: string;
   description: string;
+  calls?: number;
+}
+
+// One row of GET /api/mcp/{id}/usage — per-tool aggregate.
+export interface MCPUsageStat {
+  server_id: number;
+  server_name: string;
+  tool_name: string;
+  calls: number;
+  tasks: number;
+  agents: string[];
+  last_used?: string;
+}
+
+// One row of the recent-calls list; still no arguments or results.
+export interface MCPCall {
+  ts: string;
+  tool_name: string;
+  agent_key: string;
+  task_id: number;
+  session_id: string;
 }
 
 // ---- Skills ----

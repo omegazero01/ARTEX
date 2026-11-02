@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import {
   Sheet,
   SheetContent,
@@ -21,7 +22,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
-import type { MCPServer, MCPTool, Agent } from "@/lib/types";
+import type { MCPServer, MCPTool, Agent, MCPUsageStat, MCPCall } from "@/lib/types";
 
 type Transport = "stdio" | "http" | "sse";
 type FormState = {
@@ -56,6 +57,9 @@ export default function MCPPage() {
   const [tools, setTools] = React.useState<MCPTool[]>([]);
   const [toolsLoading, setToolsLoading] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [usageStats, setUsageStats] = React.useState<MCPUsageStat[]>([]);
+  const [recentCalls, setRecentCalls] = React.useState<MCPCall[]>([]);
+  const [usageLoading, setUsageLoading] = React.useState(false);
 
   const load = React.useCallback(() => {
     api.agents().then(setAgents).catch(() => {});
@@ -121,6 +125,21 @@ export default function MCPPage() {
     setTab("config");
     setOpen(true);
     loadTools(s.id);
+    loadUsage(s.id);
+  }
+
+  async function loadUsage(id: number) {
+    setUsageLoading(true);
+    try {
+      const result = await api.mcpUsage(id, 50);
+      setUsageStats(result.stats ?? []);
+      setRecentCalls(result.calls ?? []);
+    } catch {
+      setUsageStats([]);
+      setRecentCalls([]);
+    } finally {
+      setUsageLoading(false);
+    }
   }
 
   async function loadTools(id: number) {
@@ -345,7 +364,10 @@ export default function MCPPage() {
           <div className="flex flex-col divide-y">
             {tools.map((t) => (
               <div key={t.name} className="py-2.5">
-                <code className="font-mono text-sm">{t.name}</code>
+                <div className="flex items-center justify-between gap-2">
+                  <code className="font-mono text-sm">{t.name}</code>
+                  <Badge variant="secondary">调用 {t.calls ?? 0} 次</Badge>
+                </div>
                 {t.description && (
                   <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
                     {t.description}
@@ -355,6 +377,60 @@ export default function MCPPage() {
             ))}
           </div>
         )}
+      </div>
+    );
+  }
+
+  function renderUsage() {
+    if (usageLoading) return <p className="text-muted-foreground text-sm">加载调用统计中…</p>;
+    if (usageStats.length === 0 && recentCalls.length === 0)
+      return (
+        <p className="text-muted-foreground text-sm">
+          暂无调用记录。工具调用后会在此显示统计与最近明细。
+        </p>
+      );
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="grid gap-2">
+          <h3 className="font-medium text-sm">工具统计</h3>
+          <div className="flex flex-col divide-y rounded-md border">
+            {usageStats.map((stat) => (
+              <div key={stat.tool_name} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                <code className="min-w-0 flex-1 truncate font-mono">{stat.tool_name}</code>
+                <span className="text-muted-foreground text-xs">
+                  {stat.calls} 次 · {stat.tasks} 个任务
+                </span>
+                {stat.agents.length > 0 && <Badge variant="outline">{stat.agents.join("、")}</Badge>}
+                {stat.last_used && (
+                  <time className="text-muted-foreground text-xs">
+                    {new Date(stat.last_used).toLocaleString()}
+                  </time>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        <Separator />
+        <div className="grid gap-2">
+          <h3 className="font-medium text-sm">最近调用</h3>
+          <div className="flex flex-col divide-y rounded-md border">
+            {recentCalls.map((call) => (
+              <div
+                key={`${call.ts}-${call.tool_name}-${call.task_id}-${call.session_id}`}
+                className="grid gap-1 px-3 py-2 text-xs"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <time className="text-muted-foreground">{new Date(call.ts).toLocaleString()}</time>
+                  <code className="font-mono">{call.tool_name}</code>
+                  <Badge variant="outline">{call.agent_key || "未知 Agent"}</Badge>
+                </div>
+                <span className="text-muted-foreground">
+                  任务 {call.task_id || "—"} · 会话 {call.session_id || "—"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
@@ -389,6 +465,7 @@ export default function MCPPage() {
                 <Badge variant="outline" className="uppercase">
                   {s.transport}
                 </Badge>
+                <Badge variant="secondary">{s.calls ?? 0} 次调用</Badge>
                 <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                   <Switch
                     checked={s.enabled}
@@ -410,6 +487,14 @@ export default function MCPPage() {
               <p className="text-muted-foreground text-sm">
                 {s.tools && s.tools.length > 0 ? `${s.tools.length} 个工具` : "尚未发现工具"}
               </p>
+              {s.last_used && (
+                <p className="text-muted-foreground text-xs">
+                  最近使用 {new Date(s.last_used).toLocaleString()}
+                  {s.usage_agents && s.usage_agents.length > 0
+                    ? ` · ${s.usage_agents.join("、")}`
+                    : ""}
+                </p>
+              )}
               <div className="grid gap-2" onClick={(e) => e.stopPropagation()}>
                 <span className="text-muted-foreground text-xs">可见性（按 Agent 授权）</span>
                 <div className="flex flex-wrap gap-x-4 gap-y-2">
@@ -463,6 +548,11 @@ export default function MCPPage() {
               </TabsContent>
               <TabsContent value="tools" className="min-h-0 flex-1 overflow-y-auto">
                 {renderTools()}
+                <Separator />
+                <div className="py-4">
+                  <h3 className="mb-3 font-medium text-sm">调用统计</h3>
+                  {renderUsage()}
+                </div>
               </TabsContent>
             </Tabs>
           ) : (

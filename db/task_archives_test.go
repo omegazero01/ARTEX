@@ -158,6 +158,7 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 		_, _ = d.Exec(`DELETE FROM llm_usage WHERE task_id=$1 OR exploration_id=$2`, fmt.Sprint(task.ID), task.ExplorationID)
 		_, _ = d.Exec(`DELETE FROM skill_usage WHERE task_id=$1 OR exploration_id=$2`, task.ID, task.ExplorationID)
 		_, _ = d.Exec(`DELETE FROM tool_usage WHERE task_id=$1 OR exploration_id=$2`, task.ID, task.ExplorationID)
+		_, _ = d.Exec(`DELETE FROM mcp_usage WHERE task_id=$1 OR exploration_id=$2`, task.ID, task.ExplorationID)
 		_, _ = d.Exec(`DELETE FROM task_archives WHERE task_id=$1`, task.ID)
 		_ = d.DeleteTask(task.ID)
 		_, _ = d.Exec(`DELETE FROM llm_profiles WHERE id=$1`, llmProfileID)
@@ -191,6 +192,10 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	if err := d.InsertToolUsage(&ToolUsage{ToolKey: toolName, AgentKey: "worker", TaskID: task.ID, ExplorationID: task.ExplorationID}); err != nil {
 		t.Fatal(err)
 	}
+	mcpToolName := fmt.Sprintf("archive-mcp-%d", task.ID)
+	if err := d.InsertMCPUsage(&MCPUsage{ServerID: 990009, ServerName: "archive-mcp", ToolName: mcpToolName, AgentKey: "worker", TaskID: task.ID, ExplorationID: task.ExplorationID}); err != nil {
+		t.Fatal(err)
+	}
 	if err := d.InsertLLMRecord(&LLMRecord{
 		TaskID: fmt.Sprint(task.ID), Model: "archive-model", SessionID: "archive-session",
 		Status: "ok", RawRequest: strings.Repeat("request", 1024), RawResponse: strings.Repeat("response", 1024),
@@ -222,13 +227,16 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	if snapshot.DataCounts["assets"] != 1 || snapshot.DataCounts["exploration_nodes"] < 2 {
 		t.Fatalf("unexpected snapshot counts: %#v", snapshot.DataCounts)
 	}
+	if snapshot.DataCounts["mcp_usage"] != 1 {
+		t.Fatalf("archive did not capture the MCP usage ledger row: %#v", snapshot.DataCounts)
+	}
 	if err := d.CompleteTaskArchive(archive.ID, snapshot, "/tmp/test-task.tar.zst", "abc", 100, 50); err != nil {
 		t.Fatal(err)
 	}
 	if live, err := d.GetTask(task.ID); err != nil || live != nil {
 		t.Fatalf("archived task must be hidden, got %+v, %v", live, err)
 	}
-	var nodes, assets, usage int
+	var nodes, assets, usage, mcpUsage int
 	if err := d.QueryRow(`SELECT count(*) FROM exploration_nodes WHERE exploration_id=$1`, task.ExplorationID).Scan(&nodes); err != nil {
 		t.Fatal(err)
 	}
@@ -238,8 +246,11 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	if err := d.QueryRow(`SELECT count(*) FROM llm_usage WHERE task_id=$1`, fmt.Sprint(task.ID)).Scan(&usage); err != nil {
 		t.Fatal(err)
 	}
-	if nodes != 0 || assets != 0 || usage != 0 {
-		t.Fatalf("hot compaction left nodes=%d assets=%d usage=%d", nodes, assets, usage)
+	if err := d.QueryRow(`SELECT count(*) FROM mcp_usage WHERE task_id=$1`, task.ID).Scan(&mcpUsage); err != nil {
+		t.Fatal(err)
+	}
+	if nodes != 0 || assets != 0 || usage != 0 || mcpUsage != 0 {
+		t.Fatalf("hot compaction left nodes=%d assets=%d usage=%d mcp_usage=%d", nodes, assets, usage, mcpUsage)
 	}
 	ready, err := d.GetTaskArchive(archive.ID)
 	if err != nil || ready == nil || ready.State != ArchiveReady {
@@ -294,8 +305,11 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	if err := d.QueryRow(`SELECT count(*) FROM llm_usage WHERE task_id=$1`, fmt.Sprint(task.ID)).Scan(&usage); err != nil {
 		t.Fatal(err)
 	}
-	if nodes < 2 || assets != 1 || usage != 1 {
-		t.Fatalf("restore incomplete nodes=%d assets=%d usage=%d", nodes, assets, usage)
+	if err := d.QueryRow(`SELECT count(*) FROM mcp_usage WHERE task_id=$1 AND tool_name=$2`, task.ID, mcpToolName).Scan(&mcpUsage); err != nil {
+		t.Fatal(err)
+	}
+	if nodes < 2 || assets != 1 || usage != 1 || mcpUsage != 1 {
+		t.Fatalf("restore incomplete nodes=%d assets=%d usage=%d mcp_usage=%d", nodes, assets, usage, mcpUsage)
 	}
 	var restoredRawRequest, restoredRawResponse string
 	if err := d.QueryRow(`SELECT COALESCE(raw_request,''),COALESCE(raw_response,'') FROM llm_records WHERE task_id=$1`, fmt.Sprint(task.ID)).

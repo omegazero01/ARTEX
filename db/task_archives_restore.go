@@ -78,6 +78,13 @@ WHERE relation.source_task_id=$1 LIMIT 1`, taskID).Scan(&dependent)
 			return err
 		}
 	}
+	// mcp_usage only exists in archives written after the ledger landed; clearing it
+	// for older archives would drop history the archive cannot put back.
+	if _, ok := snapshot.Tables["mcp_usage"]; ok {
+		if _, err := tx.Exec(`DELETE FROM mcp_usage WHERE task_id=$1 OR exploration_id=$2`, taskID, expID); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(`DELETE FROM side_question_sessions WHERE task_id=$1`, taskID); err != nil {
 		return err
 	}
@@ -286,7 +293,7 @@ WHERE archive.id=$1 FOR UPDATE OF archive,task`, archiveID).Scan(&taskID, &expID
 	} else if err := insertArchiveRows(tx, "llm_records", remappedTables["llm_records"]); err != nil {
 		return nil, fmt.Errorf("restore llm_records: %w", err)
 	}
-	for _, table := range []string{"llm_usage", "skill_usage", "tool_usage"} {
+	for _, table := range []string{"llm_usage", "skill_usage", "tool_usage", "mcp_usage"} {
 		if err := insertArchiveRows(tx, table, remappedTables[table]); err != nil {
 			return nil, fmt.Errorf("restore %s: %w", table, err)
 		}
@@ -388,6 +395,7 @@ func insertArchiveRows(tx *sql.Tx, table string, raw json.RawMessage) error {
 		"exploration_nodes": true, "exploration_edges": true, "exploration_anchors": true,
 		"task_constraints": true, "activity": true, "task_asset_links": true, "findings": true,
 		"llm_records": true, "llm_usage": true, "skill_usage": true, "tool_usage": true,
+		"mcp_usage": true,
 		"side_question_sessions": true, "side_question_requests": true,
 	}
 	if !allowed[table] {

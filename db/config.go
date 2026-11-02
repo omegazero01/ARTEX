@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -883,6 +884,7 @@ func (d *DB) MCPToolNames(serverID int64) ([]string, error) {
 type MCPTool struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Calls       int    `json:"calls"`
 }
 
 // MCPToolsDetailed returns the cached tools (name + description) for a server.
@@ -891,16 +893,57 @@ func (d *DB) MCPToolsDetailed(serverID int64) ([]MCPTool, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []MCPTool
 	for rows.Next() {
 		var t MCPTool
 		if err := rows.Scan(&t.Name, &t.Description); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		out = append(out, t)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	// Close before the aggregate query: on a single-connection pool the ledger
+	// query would otherwise wait on this cursor.
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	// Attach per-tool call counts from the ledger (best-effort; zero until called).
+	stats, err := d.MCPToolUsageStats(serverID)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]int, len(stats))
+	for _, stat := range stats {
+		byName[stat.ToolName] = stat.Calls
+	}
+	for i := range out {
+		// The cache stores the model-facing name (mcp__server__tool); the ledger
+		// stores the bare tool name, so try both spellings.
+		if calls, ok := byName[out[i].Name]; ok {
+			out[i].Calls = calls
+			continue
+		}
+		if bare := bareMCPToolName(out[i].Name); bare != out[i].Name {
+			out[i].Calls = byName[bare]
+		}
+	}
+	return out, nil
+}
+
+// bareMCPToolName drops the mcp__<server>__ prefix from a model-facing tool name.
+func bareMCPToolName(name string) string {
+	rest, ok := strings.CutPrefix(name, "mcp__")
+	if !ok {
+		return name
+	}
+	if i := strings.Index(rest, "__"); i >= 0 {
+		return rest[i+2:]
+	}
+	return name
 }
 
 // SaveMCPTools replaces the cached tool list for a server (called after discovery).
