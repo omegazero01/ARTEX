@@ -32,6 +32,9 @@ type DBFinding struct {
 	AssetIDs        []int64
 	Status          string
 	Report          string // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
+	// ReportDetail 保存完整技术明细(含 <!-- SERIES:TECHNICAL --> 注释块),供内部
+	// 检索与复盘;导出与 UI 只用 Report(人类提交版)。
+	ReportDetail    string
 	CreatedAt       time.Time
 	TaskDescription string // populated via LEFT JOIN on tasks
 }
@@ -633,13 +636,13 @@ func (d *DB) FindingStats() (*FindingStats, error) {
 func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 	f := &DBFinding{}
 	var aidsJSON string
-	err := d.QueryRow(`SELECT `+findingSelectCols+`, COALESCE(f.report, '')
+	err := d.QueryRow(`SELECT `+findingSelectCols+`, COALESCE(f.report, ''), COALESCE(f.report_detail, '')
 		FROM findings f
 		LEFT JOIN tasks t ON f.task_id = t.id
 		WHERE f.id = $1`, id).Scan(
 		&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 		&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
-		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report)
+		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report, &f.ReportDetail)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -706,7 +709,7 @@ func (d *DB) SetFindingStatus(id int64, status string) (int64, error) {
 // whose node_id matches — report_finding returns that node id, so an agent tool
 // can address the finding it just created. Returns rows affected (0 when no row).
 func (d *DB) SetFindingReportByNodeID(nodeID int64, report string) (int64, error) {
-	return d.SetFindingReportVersionByNodeID(context.Background(), nodeID, report, nil)
+	return d.SetFindingReportVersionByNodeID(context.Background(), nodeID, report, report, nil)
 }
 
 // setFindingCol updates one text column on the standalone finding row AND mirrors

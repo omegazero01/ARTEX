@@ -425,10 +425,10 @@ func (s *Server) toolGetTaskNodeDetail() actool.CoreTool {
 // task-agnostic, so this host tool needs no task_id / exploration store.
 func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 	return wrTool("update_finding_report",
-		"为已登记的漏洞写入/更新【详细报告】(Markdown 全文,整段覆盖旧内容)。finding_id 传 report_finding 返回的那个 id(\"finding recorded: <id>\" 里的数字)。报告建议包含:漏洞概述、影响与危害、复现步骤、证据/PoC、修复建议。",
+		"为已登记的漏洞写入/更新【提交报告】(Markdown 全文,整段覆盖旧内容)。finding_id 传 report_finding 返回的那个 id(\"finding recorded: <id>\" 里的数字)。报告必须按固定模板包含:漏洞名称、漏洞等级、漏洞类型、漏洞URL、详细描述(最多 4 句/350 字,单句不超过 120 字:位置、原因、影响、一句定级依据)、复现步骤(≤6 步,完整请求包/响应包,不限字数)、影响范围(可选,最多 4 条/每条一行 60 字内/合计 200 字内)、修复方案(最多 4 条/每条 120 字内/合计 400 字内);不要单独写证据段;超出声明的细节放技术附录。正文末尾可用 <!-- SERIES:TECHNICAL:BEGIN --> ... <!-- SERIES:TECHNICAL:END --> 包住仅供内部检索的技术附录；该块不会导出给审核员。",
 		objSchema(map[string]any{
 			"finding_id":       map[string]any{"type": "integer", "description": "目标漏洞 id(report_finding 返回的 id)"},
-			"report":           strParam("详细报告全文,Markdown 格式"),
+			"report":           strParam("提交报告全文,Markdown 格式；字数预算见工具说明；技术附录用 SERIES:TECHNICAL 注释块包住"),
 			"evidence_version": map[string]any{"type": "integer", "description": "get_finding_traffic 返回的证据 version；用于防止报告覆盖新的证据变更"},
 		}, "finding_id", "report"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
@@ -442,14 +442,18 @@ func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 			if nodeID <= 0 {
 				return actool.Errorf("finding_id 无效"), nil
 			}
-			n, err := s.m.pg.SetFindingReportVersionByNodeID(ctx, nodeID, a.Report, a.EvidenceVersion)
+			if err := validateFindingReport(a.Report); err != nil {
+				return actool.Errorf("报告不符合提交模板：" + err.Error()), nil
+			}
+			human, detail := splitFindingReport(a.Report)
+			n, err := s.m.pg.SetFindingReportVersionByNodeID(ctx, nodeID, human, detail, a.EvidenceVersion)
 			if err != nil {
 				return actool.Errorf(err.Error()), nil
 			}
 			if n == 0 {
 				return actool.Errorf(fmt.Sprintf("未找到 finding_id=%d 对应的漏洞记录(先用 report_finding 登记)", nodeID)), nil
 			}
-			return actool.Text(fmt.Sprintf("finding %d report updated (%d chars)", nodeID, len(a.Report))), nil
+			return actool.Text(fmt.Sprintf("finding %d report updated (submission %d chars, technical %d chars)", nodeID, len([]rune(human)), len([]rune(detail)))), nil
 		})
 }
 
