@@ -942,11 +942,20 @@ CREATE TABLE IF NOT EXISTS tools (
     kind        TEXT    NOT NULL DEFAULT 'builtin',
     exec        JSONB   NOT NULL DEFAULT '{}',
     deferred    BOOLEAN NOT NULL DEFAULT false,
+    executable  TEXT    NOT NULL DEFAULT '',
+    directory   TEXT    NOT NULL DEFAULT '',
+    usage_help  TEXT    NOT NULL DEFAULT '',
+    when_to_use TEXT    NOT NULL DEFAULT '',
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 DROP TRIGGER IF EXISTS trg_tools_upd ON tools;
 CREATE TRIGGER trg_tools_upd BEFORE UPDATE ON tools
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+-- kind=shell 环境声明：可执行命令/目录/用法/调用时机（旧库自动补列，空=按 key 匹配）。
+ALTER TABLE tools ADD COLUMN IF NOT EXISTS executable  TEXT NOT NULL DEFAULT '';
+ALTER TABLE tools ADD COLUMN IF NOT EXISTS directory   TEXT NOT NULL DEFAULT '';
+ALTER TABLE tools ADD COLUMN IF NOT EXISTS usage_help  TEXT NOT NULL DEFAULT '';
+ALTER TABLE tools ADD COLUMN IF NOT EXISTS when_to_use TEXT NOT NULL DEFAULT '';
 
 -- =====================================================================
 -- I. 会话（对话页）

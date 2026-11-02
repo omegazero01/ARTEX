@@ -212,7 +212,11 @@ func seedPrompts(pg *db.DB) {
 // tool-assembly time each built-in tool is filtered by its agent binding / enabled
 // flag and, if kept, wrapped so the model sees the DB-overridden description/schema
 // and缺省入参 get injected. MCP/skill/host tools have no row and pass through.
-func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
+func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool, configRoot ...string) {
+	root := ""
+	if len(configRoot) > 0 {
+		root = configRoot[0]
+	}
 	agent.FindingTrafficBindingEnabled = func() bool { return pg.GetBool(settingAgentTrafficBinding, false) }
 	// Seed the built-in domain tools (first-insert only; DO NOTHING preserves edits).
 	// No startup prune: rows we didn't seed are left alone so future user-defined
@@ -290,23 +294,22 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 				out = append(out, resolve(inst, row))
 			}
 		}
-		// shell hints: user-defined kind="shell" tools are not callable — they are
-		// environment declarations that tell the model which command-line tools are
-		// installed. Collect the ones bound to this agent and append to Bash's description.
-		var shellHints []string
-		for _, row := range rows {
-			if row.Kind == "shell" && row.Enabled && contains(row.Agents, agentKey) {
-				shellHints = append(shellHints, "- "+row.Key+": "+row.Description)
+		// Bash requests are attributed to user-defined kind="shell" declarations
+		// before execution; the ledger row carries the same attribution as any
+		// other catalog tool. The declaration itself stays uncallable.
+		for i, tool := range out {
+			if tool.Name() == "Bash" {
+				if _, known := byKey["Bash"]; !known {
+					tool = meterTool(tool, pg, "Bash", agentKey, runInfo)
+				}
+				out[i] = &shellMeteredTool{CoreTool: tool, recorder: pg, declarations: rows, agentKey: agentKey, ri: runInfo, configRoot: root}
 			}
 		}
 		// Bash description addenda: the host execution-environment note is always
 		// attached (on Windows it explains that commands actually run through
 		// PowerShell); user-defined kind="shell" declarations are appended when
 		// present.
-		note := agent.HostEnvironmentNote() + agent.HostLessonNote()
-		if len(shellHints) > 0 {
-			note += "\n\n以下工具已安装在此 bash 环境中，可直接通过 Bash 调用：\n" + strings.Join(shellHints, "\n")
-		}
+		note := agent.HostEnvironmentNote() + agent.HostLessonNote() + shellToolNote(rows, agentKey)
 		if note != "" {
 			for i, t := range out {
 				if t.Name() == "Bash" {
@@ -332,6 +335,46 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 		}
 		return out
 	}
+}
+
+func shellToolNote(rows []*db.Tool, agentKey string) string {
+	var hints []string
+	for _, row := range rows {
+		if row.Kind != "shell" || !row.Enabled || !contains(row.Agents, agentKey) {
+			continue
+		}
+		description := strings.ReplaceAll(strings.TrimSpace(row.Description), "\r\n", "\n")
+		lines := []string{"- " + row.Key}
+		if description != "" {
+			parts := strings.Split(description, "\n")
+			lines[0] += ": " + parts[0]
+			for _, part := range parts[1:] {
+				lines = append(lines, "  "+part)
+			}
+		}
+		lines = appendShellHintField(lines, "可执行命令", row.Executable)
+		lines = appendShellHintField(lines, "所在目录", row.Directory)
+		lines = appendShellHintField(lines, "用法帮助", row.UsageHelp)
+		lines = appendShellHintField(lines, "何时调用", row.WhenToUse)
+		hints = append(hints, strings.Join(lines, "\n"))
+	}
+	if len(hints) == 0 {
+		return ""
+	}
+	return "\n\n以下工具已安装在当前命令执行环境中，可直接通过 Bash 工具调用：\n" + strings.Join(hints, "\n")
+}
+
+func appendShellHintField(lines []string, label, value string) []string {
+	value = strings.ReplaceAll(strings.TrimSpace(value), "\r\n", "\n")
+	if value == "" {
+		return lines
+	}
+	parts := strings.Split(value, "\n")
+	lines = append(lines, "  "+label+"："+parts[0])
+	for _, part := range parts[1:] {
+		lines = append(lines, "    "+part)
+	}
+	return lines
 }
 
 func contains(ss []string, v string) bool {

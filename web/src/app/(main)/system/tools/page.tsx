@@ -549,6 +549,10 @@ function CustomToolDialog({
   const [key, setKey] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [kind, setKind] = React.useState<"shell" | "command" | "script" | "http">("shell");
+  const [executable, setExecutable] = React.useState("");
+  const [directory, setDirectory] = React.useState("");
+  const [usageHelp, setUsageHelp] = React.useState("");
+  const [whenToUse, setWhenToUse] = React.useState("");
   const [ex, setEx] = React.useState<ExecState>({
     command: "", code: "", method: "GET", url: "", headers: "", body: "", timeout_ms: "", proxy: "", use_recording_proxy: false,
   });
@@ -567,6 +571,7 @@ function CustomToolDialog({
     setParamsText(""); setTestResult(null);
     if (edit === "new") {
       setKey(""); setDescription(""); setKind("shell");
+      setExecutable(""); setDirectory(""); setUsageHelp(""); setWhenToUse("");
       setEx({ command: "", code: "", method: "GET", url: "", headers: "", body: "", timeout_ms: "", proxy: "", use_recording_proxy: false });
       setSchemaText(""); setBound([]); setDeferred(false); setEnabled(true);
       return;
@@ -576,6 +581,10 @@ function CustomToolDialog({
     setKey(t.key);
     setDescription(t.description);
     setKind((t.kind as "shell" | "command" | "script" | "http") ?? "shell");
+    setExecutable(t.executable ?? "");
+    setDirectory(t.directory ?? "");
+    setUsageHelp(t.usage_help ?? "");
+    setWhenToUse(t.when_to_use ?? "");
     setEx({
       command: String(e.command ?? ""),
       code: String(e.code ?? ""),
@@ -627,7 +636,14 @@ function CustomToolDialog({
       }
     }
     setSaving(true);
-    const payload = { description, schema: kind === "shell" ? {} : schema, agents: bound, enabled, kind, exec: buildExec(), deferred: kind === "shell" ? false : deferred };
+    const payload = {
+      description, schema: kind === "shell" ? {} : schema, agents: bound, enabled, kind,
+      exec: buildExec(), deferred: kind === "shell" ? false : deferred,
+      executable: kind === "shell" ? executable.trim() : "",
+      directory: kind === "shell" ? directory.trim() : "",
+      usage_help: kind === "shell" ? usageHelp.trim() : "",
+      when_to_use: kind === "shell" ? whenToUse.trim() : "",
+    };
     try {
       if (isNew) await api.createCustomTool({ key: key.trim(), ...payload });
       else await api.updateCustomTool(tool!.key, payload);
@@ -705,9 +721,59 @@ function CustomToolDialog({
               </SelectContent>
             </Select>
             {kind === "shell" && (
-              <p className="text-muted-foreground text-xs">适合 nmap、sqlmap、ffuf 等出名工具——模型已知用法，只需声明"可在 bash 中调用"即可。名称+描述会追加到 Bash 工具描述里。</p>
+              <p className="text-muted-foreground text-xs">
+                名称、描述、目录、用法帮助和调用时机会追加到绑定 Agent 的 Bash 工具描述中。
+              </p>
             )}
           </div>
+
+          {kind === "shell" && (
+            <div className="grid gap-3">
+              <div className="grid gap-1.5">
+                <Label className="text-xs">可执行命令</Label>
+                <Input
+                  value={executable}
+                  onChange={(e) => setExecutable(e.target.value)}
+                  placeholder={key || "如 nmap 或 /opt/nmap/bin/nmap"}
+                />
+                <p className="text-muted-foreground text-xs">
+                  填写实际执行文件名（如 gogo_linux_amd64）或绝对路径，不含参数；留空仅按 Key 匹配。若实际文件名与 Key
+                  不同，必须填写此项才能统计 Bash 调用。
+                </p>
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-xs">工具所在目录</Label>
+                <Input
+                  className="font-mono"
+                  placeholder="如 /opt/nmap/bin"
+                  value={directory}
+                  onChange={(e) => setDirectory(e.target.value)}
+                />
+                <p className="text-muted-foreground text-xs">
+                  检测时优先查找此目录；统计时与文件名组合匹配绝对路径。不会改变 Bash 或其他工具的工作目录。
+                </p>
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-xs">工具用法帮助</Label>
+                <Textarea
+                  className="font-mono text-xs"
+                  rows={4}
+                  placeholder="如 nmap [options] target"
+                  value={usageHelp}
+                  onChange={(e) => setUsageHelp(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-xs">何时调用</Label>
+                <Textarea
+                  rows={3}
+                  placeholder="如需要探测端口和服务时"
+                  value={whenToUse}
+                  onChange={(e) => setWhenToUse(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
 
           {kind === "command" && (
             <div className="grid gap-1.5">

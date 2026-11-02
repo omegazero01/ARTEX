@@ -1093,11 +1093,11 @@ export const api = {
   resetTool: (key: string) => post<{ ok: boolean }>(`/tools/${key}/reset`, {}),
   // custom tools (自定义工具)
   createCustomTool: (
-    t: Pick<Tool, "key" | "description" | "schema" | "agents" | "enabled" | "kind" | "exec" | "deferred">,
+    t: Pick<Tool, "key" | "description" | "schema" | "agents" | "enabled" | "kind" | "exec" | "deferred" | "executable" | "directory" | "usage_help" | "when_to_use">,
   ) => post<{ key: string }>("/tools/custom", t),
   updateCustomTool: (
     key: string,
-    t: Pick<Tool, "description" | "schema" | "agents" | "enabled" | "kind" | "exec" | "deferred">,
+    t: Pick<Tool, "description" | "schema" | "agents" | "enabled" | "kind" | "exec" | "deferred" | "executable" | "directory" | "usage_help" | "when_to_use">,
   ) => put<{ ok: boolean }>(`/tools/custom/${key}`, t),
   deleteCustomTool: (key: string) => del<{ deleted: string }>(`/tools/custom/${key}`),
   testCustomTool: (body: { kind: string; exec: Record<string, unknown>; params: Record<string, unknown> }) =>

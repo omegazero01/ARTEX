@@ -1264,6 +1264,10 @@ export interface Tool {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   exec?: Record<string, any>; // 自定义工具执行规格(kind!=builtin)
   deferred?: boolean; // schema 延迟(SearchExtraTools/ExecuteExtraTool)
+  executable?: string; // kind=shell：实际命令名或绝对路径（留空按 key 匹配）
+  directory?: string; // kind=shell：工具所在目录
+  usage_help?: string; // kind=shell：用法帮助
+  when_to_use?: string; // kind=shell：何时调用
   calls?: number; // persistent runtime invocation count (older APIs may omit it)
 }
 

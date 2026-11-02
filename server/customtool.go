@@ -35,9 +35,13 @@ type customToolReq struct {
 	Schema      json.RawMessage `json:"schema"`
 	Agents      []string        `json:"agents"`
 	Enabled     bool            `json:"enabled"`
-	Kind        string          `json:"kind"` // command | script | http
+	Kind        string          `json:"kind"` // shell | command | script | http
 	Exec        json.RawMessage `json:"exec"`
 	Deferred    bool            `json:"deferred"`
+	Executable  string          `json:"executable"`
+	Directory   string          `json:"directory"`
+	UsageHelp   string          `json:"usage_help"`
+	WhenToUse   string          `json:"when_to_use"`
 }
 
 var reToolKey = reAgentKey // 同 agent key 规则:小写字母开头 + 小写字母/数字/下划线
@@ -69,9 +73,14 @@ func (s *Server) pgCreateCustomTool(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "该 key 已存在(内置或自定义工具)")
 		return
 	}
+	if err := (&db.Tool{Key: req.Key, Kind: req.Kind, Executable: req.Executable}).ValidateShellCommand(); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
 	if err := pg.CreateCustomTool(&db.Tool{
 		Key: req.Key, Description: req.Description, Schema: req.Schema, Agents: req.Agents,
 		Enabled: req.Enabled, Kind: req.Kind, Exec: req.Exec, Deferred: req.Deferred,
+		Executable: req.Executable, Directory: req.Directory, UsageHelp: req.UsageHelp, WhenToUse: req.WhenToUse,
 	}); err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -107,9 +116,14 @@ func (s *Server) pgUpdateCustomTool(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "http 工具必须提供参数 JSON Schema(不能留空)")
 		return
 	}
+	if err := (&db.Tool{Key: key, Kind: req.Kind, Executable: req.Executable}).ValidateShellCommand(); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
 	if err := pg.UpdateCustomTool(&db.Tool{
 		Key: key, Description: req.Description, Schema: req.Schema, Agents: req.Agents,
 		Enabled: req.Enabled, Kind: req.Kind, Exec: req.Exec, Deferred: req.Deferred,
+		Executable: req.Executable, Directory: req.Directory, UsageHelp: req.UsageHelp, WhenToUse: req.WhenToUse,
 	}); err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -135,7 +149,7 @@ func (s *Server) pgDeleteCustomTool(w http.ResponseWriter, r *http.Request) {
 // real tool call — it runs arbitrary command/script/http on the server, which the
 // custom-tool feature already allows, so no new capability is granted.
 type testToolReq struct {
-	Kind   string          `json:"kind"` // command | script | http
+	Kind   string          `json:"kind"` // shell | command | script | http
 	Exec   json.RawMessage `json:"exec"`
 	Params map[string]any  `json:"params"`
 }
