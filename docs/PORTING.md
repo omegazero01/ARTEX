@@ -16,7 +16,7 @@
 | 主机环境说明 + DSL 放宽 | `port/02-host-profile-dsl` | `bdf8d24` | `9de2728` | 启动时探测本机环境（PowerShell 版本、curl 别名、curl.exe 路径、临时目录）拼进 Bash 工具说明；资产 DSL 允许运算符两侧空格、`contains`/`=~` 模糊匹配、引号取值、报错带示例 | `go build ./...`=0；4 条 DSL 测试通过；真实探测输出 `len=792`，识别 PowerShell 5.1、curl 为 Invoke-WebRequest 别名 |
 | 长期记忆工具 | `port/03-memory-tools` | `8643b01` | `542be7f` | worker 记忆四工具（列目录/搜索/读取/保存），中文双字滑窗检索，纯中文名用哈希当文件名防覆盖，写完重建 MEMORY.md | 6 条记忆测试全过；`go build`=0；新 exe 启动 `health=200` |
 | 报错沉淀本机经验 | `port/04-host-lessons` | `86a840d` | `3b393cd` | 已知工具报错按签名沉淀（去重计数），只存签名与提示、不存原始命令/输出，把命中最高的 6 条追加到 Bash 描述 | 5 条测试通过；真实调用记录两次同一 `head` 报错 → `count=2`、经验提示生成、`lessons.json` 落盘 |
-| 统一提交报告模板 | `port/05-report` | `f956f46` → `d29b10c` / 前端提交 | `67dc00c` + `8b6ef32`（**已补齐**） | 统一提交报告模板（漏洞名称/等级/类型/URL + 详细描述/复现步骤/修复方案）；字数预算（350/200/400 字）；技术附录用 `<!-- SERIES:TECHNICAL -->` 切分，不导出；新增 `findings.report_detail` | 报告格式测试（含 11 条预算子用例）全过；新 exe 启动后 `findings` 表出现 `report_detail`（启动时自动迁移）；`GetFinding` 读回新列正常 |
+| 统一提交报告模板 | `port/05-report` | `f956f46` → `d29b10c` / 前端 `cf1681a` + 任务页导出 | `67dc00c` + `8b6ef32`（**已补齐**） | 统一提交报告模板（漏洞名称/等级/类型/URL + 详细描述/复现步骤/修复方案）；字数预算（350/200/400 字）；技术附录用 `<!-- SERIES:TECHNICAL -->` 切分，不导出；新增 `findings.report_detail` | 报告格式测试（含 11 条预算子用例）全过；新 exe 启动后 `findings` 表出现 `report_detail`（启动时自动迁移）；`GetFinding` 读回新列正常；任务发现页批量导出（勾选/全选 → `md-report-zip`）已补，`npx tsc --noEmit` 与 `NEXT_EXPORT=1 next build` 通过，产物 chunk 命中「导出提交报告」 |
 | 收尾闸门改用 hook | `port/06-settlement-hook` | `2a971ee` | `77d45b0` | 收尾相位不再把 Bash 从工具清单删掉（会改写请求前缀、缓存全失效）；改为 gate 观察每次请求，命中收尾提示词后由 `steerHooks.PreToolUse` 拒绝执行，工具清单全程不变 | 6 条单测（置位/前缀/PromptByReason/惰性/包装透传/ctx）；`go build ./...`=0；`go test ./agent/ ./db/` 全绿 |
 | 主代理取消意图 | `port/07-intent-cancel` | `caa4a13` → `e5286c0` | `14a567b`（**已补齐**） | 新增 `cancel_intent` 工具（默认只绑 mainagent）；`Engine.StopIntent`：运行中 worker 用 `AbortCancelledByUser` 取消并轮询等待退出注册表（15s 上限），等待/暂停/阻塞意图直接置 `stopped`，产出保留，写 mainagent 活动记录 | build + vet 干净；`go test ./agent/ ./db/` 全绿；未搬 SERIES 的 355 行 server 级测试 |
 | 禁报规则 | `port/08-finding-suppression` | `a01fd25` | `78ab23f`（**部分**） | 新增 `finding_suppressions` 表（任务级：标题/类型/摘要/资产/原因/撤销时间）；删除漏洞时快照并写规则；`RecordFindingTx` 插入前拦截，命中返回 `ErrFindingSuppressed` 与解除指引；新增 `GET /api/finding-suppressions` 与 `DELETE /api/finding-suppressions/{id}` | 新 exe 启动后 5437 库中 `finding_suppressions` 表存在、`health=200`；3 条匹配单测（同标题命中/类型不同不命中/撤销不命中/共享资产命中/无交集不命中）通过 |
@@ -38,7 +38,7 @@
 | 漏洞归并（finding cases） | `3bc602e`（后端）+ `9a52f5d`、`e19ea54`、`5426444`（前端） | “这个先跳过” | 造子系统：后端约 3000 行（含 637 行 db、558 行 server、3 张新表），前端约 1000 行；只影响报告整理（同一漏洞多条合成一案），不影响探测能力 | 先出差异清单（`report/findings.go`、`server/finding_traffic_export.go` 在 ARTEX 的对应物），再决定 |
 | 联盟系统（台账/画像/反哺） | `46903b4`、`3ceae46`、`977909c`、`4c89e3a` 等约 10 条 | “其他先不迁移” | 约 4900 行、33 文件，是城商行联盟定制业务，与通用探测无关 | 按客户定制需求单独立项 |
 
-补充：第 5 条报告移植时，**web 前端改动没有搬**（SERIES 改了 8 个前端文件，ARTEX 前端结构不同）。影响是界面仍按旧排版显示报告正文；导出与详情读 `findings.report`，技术附录不会漏出。
+补充：第 5 条的前端已搬（`cf1681a`：`api.ts`、发现页导出弹窗、详情页「提交报告」+ 技术附录折叠）；任务发现页的批量导出入口也已补齐（`findings-tab.tsx`：勾选/全选 → `md-report-zip`）。SERIES 的 `mock/finding-export.ts` 是测试替身，ARTEX mock 层没有对应实现，未搬，不影响真实环境导出。
 
 补充：第 6～8 条的移植差距（别误以为与 SERIES 完全等价）：
 
@@ -61,7 +61,7 @@
 
 | # | 条目 | 缺什么 | 影响 | 补齐代价 |
 |---|---|---|---|---|
-| 5 | 报告统一 | 无（前端已搬；SERIES 的 mock 导出模块与 tab 导出按钮在 ARTEX 无对应实现） | — | — |
+| 5 | 报告统一 | 无（前端、任务发现页批量导出均已搬；SERIES 的 `mock/finding-export.ts` 是测试替身，未搬） | — | — |
 | 7 | 意图取消 | ~~用户取消锁、领取过滤、通知规划者~~ 已补（`e5286c0`）；仅缺 SERIES 的 355 行 server 级测试 | 无功能缺口 | 可选：补等价测试 |
 | 8 | 禁报规则 | 上报前模型自审、资产/worker 事务级权限校验、禁报清单注入 planner/worker 提示、前端规则管理页 | 模型会先尝试上报一次再被拒；无越权兜底 | 约 500–700 行 |
 | 6 | 收尾禁 Bash | 与 SERIES 实现位置不同（`sdk_session.go` → worker 包装 + hook），行为等价但无原版测试 | 无功能缺口 | 可选：补等价测试 |

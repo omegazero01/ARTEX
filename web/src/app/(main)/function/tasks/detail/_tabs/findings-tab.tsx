@@ -4,12 +4,14 @@ import * as React from "react";
 
 import Link from "next/link";
 
-import { ArrowDownIcon, ArrowUpIcon, ArrowUpRightIcon, ChevronRightIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, ArrowUpRightIcon, ChevronRightIcon, DownloadIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { useStoredSortPreference } from "@/lib/sort-preference";
@@ -44,15 +46,27 @@ function Row({
   f,
   contextTaskId,
   onStatus,
+  selected,
+  onSelect,
 }: {
   f: Finding;
   contextTaskId: string;
   onStatus: (f: Finding, next: FindingStatus) => void;
+  selected?: boolean;
+  onSelect?: (checked: boolean) => void;
 }) {
   const [open, setOpen] = React.useState(false);
   return (
     <div className="border-b last:border-b-0">
       <div className="flex w-full items-center gap-3 px-4 py-3 text-sm hover:bg-accent/40">
+        {onSelect && (
+          <Checkbox
+            checked={selected ?? false}
+            onCheckedChange={(v) => onSelect(v === true)}
+            aria-label={`选择 ${findingLabel(f)} 用于导出`}
+            className="shrink-0"
+          />
+        )}
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
@@ -187,11 +201,64 @@ export function FindingsTab({ taskId }: { taskId: string }) {
       return b.id.localeCompare(a.id, undefined, { numeric: true });
     });
 
+  // 只有归属本任务、且有 finding_id 的记录能导出；继承来的发现是只读的。
+  const selectable = items.filter((f) => Boolean(f.finding_id) && !f.inherited);
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
+  const [exporting, setExporting] = React.useState(false);
+  const allSelected = selectable.length > 0 && selectable.every((f) => selectedIds.has(f.finding_id as string));
+
+  const toggleSelected = React.useCallback((id: string, checked: boolean) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  function toggleAll(checked: boolean) {
+    setSelectedIds(checked ? new Set(selectable.map((f) => f.finding_id as string)) : new Set());
+  }
+
+  async function exportSelected() {
+    if (exporting || selectedIds.size === 0) return;
+    setExporting(true);
+    try {
+      await api.exportFindings({ format: "md-report-zip", scope: "selected", ids: [...selectedIds] });
+      toast.success("已开始下载导出文件");
+    } catch (e) {
+      toast.error(`导出失败：${(e as Error).message}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <Card className="overflow-hidden py-0">
       <CardContent className="px-0">
-        <div className="flex items-center border-b px-4 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center gap-3 border-b px-4 py-2 text-xs text-muted-foreground">
+          <Checkbox
+            checked={allSelected}
+            onCheckedChange={(v) => toggleAll(v === true)}
+            disabled={selectable.length === 0}
+            aria-label="全选当前列表的发现"
+            className="shrink-0"
+          />
           <span className="min-w-0 flex-1">漏洞</span>
+          {selectedIds.size > 0 && <span className="shrink-0">已选 {selectedIds.size} 条</span>}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0"
+            onClick={() => void exportSelected()}
+            disabled={exporting || selectedIds.size === 0}
+            aria-label="导出选中的提交报告"
+            title="按提交版模板导出选中发现（一漏洞一 .md，打包 zip）"
+          >
+            <DownloadIcon className="size-3.5" />
+            {exporting ? "导出中…" : "导出提交报告"}
+          </Button>
           <button
             type="button"
             className="inline-flex items-center gap-1 outline-none focus-visible:underline"
@@ -211,9 +278,19 @@ export function FindingsTab({ taskId }: { taskId: string }) {
             )}
           </button>
         </div>
-        {items.map((f) => (
-          <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
-        ))}
+        {items.map((f) => {
+          const canSelect = Boolean(f.finding_id) && !f.inherited;
+          return (
+            <Row
+              key={f.id}
+              f={f}
+              contextTaskId={taskId}
+              onStatus={onStatus}
+              selected={canSelect ? selectedIds.has(f.finding_id as string) : undefined}
+              onSelect={canSelect ? (checked) => toggleSelected(f.finding_id as string, checked) : undefined}
+            />
+          );
+        })}
         {items.length === 0 && (
           <p className="px-4 py-8 text-center text-sm text-muted-foreground">本任务及直接关联任务暂无确认发现。</p>
         )}
