@@ -2159,7 +2159,10 @@ func (s *Server) findingsExport(w http.ResponseWriter, r *http.Request) {
 	case "md-single":
 		setDownload("text/markdown; charset=utf-8", "findings-"+stamp+".md")
 		_, _ = w.Write([]byte(report.FindingsMarkdown(fs, now)))
-	case "report-zip":
+	case "md-report":
+		setDownload("text/markdown; charset=utf-8", "reports-"+stamp+".md")
+		_, _ = w.Write([]byte(report.FindingsReportMarkdown(fs)))
+	case "report-zip", "md-report-zip":
 		path := filepath.Join(stage, "reports.zip")
 		if err := buildFindingsReportZip(path, fs); err != nil {
 			writeErr(w, 500, err.Error())

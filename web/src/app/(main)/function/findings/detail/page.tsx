@@ -194,22 +194,30 @@ function FindingDetailInner() {
                 readOnly={finding.inherited}
                 onChanged={load}
               />
-              {/* 证据下方：详细报告(Markdown 渲染) */}
+              {/* 证据下方：提交报告(Markdown 渲染) */}
               <Card>
                 <CardHeader className="flex-row items-center justify-between">
-                  <CardTitle className="text-sm">详细报告</CardTitle>
-                  {finding.report && <CopyButton text={finding.report} successMessage="已复制详细报告" />}
+                  <CardTitle className="text-sm">提交报告</CardTitle>
+                  {finding.report && <CopyButton text={finding.report} successMessage="已复制提交报告" />}
                 </CardHeader>
                 <CardContent>
                   {finding.report_stale ? (
                     <Alert>
-                      <AlertDescription>流量证据已变更，详细报告待更新。</AlertDescription>
+                      <AlertDescription>流量证据已变更，提交报告待更新。</AlertDescription>
                     </Alert>
                   ) : null}
                   {finding.report ? (
                     <Markdown text={finding.report} />
                   ) : (
-                    <p className="text-sm text-muted-foreground">暂无详细报告。</p>
+                    <p className="text-sm text-muted-foreground">暂无提交报告。</p>
+                  )}
+                  {finding.report_detail && finding.report_detail !== finding.report && (
+                    <details className="mt-4 rounded-md border p-3">
+                      <summary className="cursor-pointer text-sm font-medium">技术细节（内部检索，不导出）</summary>
+                      <div className="mt-3 max-h-[60vh] overflow-auto">
+                        <Markdown text={finding.report_detail} />
+                      </div>
+                    </details>
                   )}
                 </CardContent>
               </Card>

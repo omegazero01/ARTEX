@@ -398,18 +398,18 @@ export function FindingsTable({
                         {f.evidence}
                       </pre>
 
-                      {/* 详细报告(Markdown):展开时按 finding_id 懒加载,免进详情页即可查看。 */}
+                      {/* 提交报告(Markdown):展开时按 finding_id 懒加载,免进详情页即可查看。 */}
                       {f.finding_id && (
                         <div className="flex flex-col gap-1.5">
                           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                             <span className="flex items-center gap-2">
                               <FileTextIcon className="size-3.5" />
-                              详细报告
+                              提交报告
                             </span>
                             {reports[rowKey]?.status === "done" && reports[rowKey]?.text.trim() && (
                               <CopyButton
                                 text={reports[rowKey]?.text}
-                                successMessage="已复制详细报告"
+                                successMessage="已复制提交报告"
                                 variant="ghost"
                                 className="h-6 px-2 text-xs"
                               />
@@ -422,7 +422,7 @@ export function FindingsTable({
                             if (rep.status === "error")
                               return <p className="text-xs text-muted-foreground">报告加载失败。</p>;
                             if (!rep.text.trim())
-                              return <p className="text-xs text-muted-foreground">暂无详细报告。</p>;
+                              return <p className="text-xs text-muted-foreground">暂无提交报告。</p>;
                             return (
                               // break-words 会继承到段落/列表,pre 另加
                               // whitespace-pre-wrap 让代码块也换行——否则长代码行/长 URL
