@@ -10,19 +10,19 @@
 
 ## 一、已完成移植
 
-| # | 分支 | ARTEX 提交 | 来源提交 | 内容 | 验证证据 |
+| 条目 | 分支 | ARTEX 提交 | 来源提交 | 内容 | 验证证据 |
 |---|---|---|---|---|---|
-| 1 | `port/01-traffic-decode` | `79f2fed` | `95f9f05` | 流量正文按 Content-Encoding 解码（gzip/deflate/zlib/br/zstd，多重编码），原始字节仍存盘，索引/预览用解码视图 | `go test ./traffic/` ok；经 8788 抓 gzip 响应，`_index` 中响应体前两字节为 `1f 8b`，FTS 命中 `abc123`、`内网测` |
-| 2 | `port/02-host-profile-dsl` | `bdf8d24` | `9de2728` | 启动时探测本机环境（PowerShell 版本、curl 别名、curl.exe 路径、临时目录）拼进 Bash 工具说明；资产 DSL 允许运算符两侧空格、`contains`/`=~` 模糊匹配、引号取值、报错带示例 | `go build ./...`=0；4 条 DSL 测试通过；真实探测输出 `len=792`，识别 PowerShell 5.1、curl 为 Invoke-WebRequest 别名 |
-| 3 | `port/03-memory-tools` | `8643b01` | `542be7f` | worker 记忆四工具（列目录/搜索/读取/保存），中文双字滑窗检索，纯中文名用哈希当文件名防覆盖，写完重建 MEMORY.md | 6 条记忆测试全过；`go build`=0；新 exe 启动 `health=200` |
-| 4 | `port/04-host-lessons` | `86a840d` | `3b393cd` | 已知工具报错按签名沉淀（去重计数），只存签名与提示、不存原始命令/输出，把命中最高的 6 条追加到 Bash 描述 | 5 条测试通过；真实调用记录两次同一 `head` 报错 → `count=2`、经验提示生成、`lessons.json` 落盘 |
-| 5 | `port/05-report` | `f956f46` → `d29b10c` / 前端提交 | `67dc00c` + `8b6ef32`（**已补齐**） | 统一提交报告模板（漏洞名称/等级/类型/URL + 详细描述/复现步骤/修复方案）；字数预算（350/200/400 字）；技术附录用 `<!-- SERIES:TECHNICAL -->` 切分，不导出；新增 `findings.report_detail` | 报告格式测试（含 11 条预算子用例）全过；新 exe 启动后 `findings` 表出现 `report_detail`（启动时自动迁移）；`GetFinding` 读回新列正常 |
-| 6 | `port/06-settlement-hook` | `2a971ee` | `77d45b0` | 收尾相位不再把 Bash 从工具清单删掉（会改写请求前缀、缓存全失效）；改为 gate 观察每次请求，命中收尾提示词后由 `steerHooks.PreToolUse` 拒绝执行，工具清单全程不变 | 6 条单测（置位/前缀/PromptByReason/惰性/包装透传/ctx）；`go build ./...`=0；`go test ./agent/ ./db/` 全绿 |
-| 7 | `port/07-intent-cancel` | `caa4a13` → `e5286c0` | `14a567b`（**已补齐**） | 新增 `cancel_intent` 工具（默认只绑 mainagent）；`Engine.StopIntent`：运行中 worker 用 `AbortCancelledByUser` 取消并轮询等待退出注册表（15s 上限），等待/暂停/阻塞意图直接置 `stopped`，产出保留，写 mainagent 活动记录 | build + vet 干净；`go test ./agent/ ./db/` 全绿；未搬 SERIES 的 355 行 server 级测试 |
-| 8 | `port/08-finding-suppression` | `a01fd25` | `78ab23f`（**部分**） | 新增 `finding_suppressions` 表（任务级：标题/类型/摘要/资产/原因/撤销时间）；删除漏洞时快照并写规则；`RecordFindingTx` 插入前拦截，命中返回 `ErrFindingSuppressed` 与解除指引；新增 `GET /api/finding-suppressions` 与 `DELETE /api/finding-suppressions/{id}` | 新 exe 启动后 5437 库中 `finding_suppressions` 表存在、`health=200`；3 条匹配单测（同标题命中/类型不同不命中/撤销不命中/共享资产命中/无交集不命中）通过 |
-| 9 | `port/09-bash-prompt` | `baf9ef2` | `f5a1b6e` + `092a081`（**用户已确认保留改写版**） | Windows 下把 Bash 工具的扩展说明换成改写版：删掉 `&&` 串联和 heredoc 两条 PowerShell 5.1 会报错的写法，保留“复杂任务先写脚本再执行、避免需要交互输入的命令”；`AugmentTools` 末尾统一套用，覆盖 worker/planner/mainagent/chat/reporter 全部入口 | 3 条测试通过（按系统判断、渲染后的 schema 不含 Unix 写法且基础描述/替换建议都在、只动 Bash 不动其它工具） |
-| 10 | `port/10-skill-path` | `7b9d5f5` | `b4e19b7` | 技能子目录路径统一 `/`：`skillRelPath` 改用 `path.Clean`/`path.IsAbs`，`walkSkillFiles` 返回前做 `filepath.ToSlash` | 修复前 `go test ./server -run TestSkillRelPath` 在本机 FAIL（子目录用例返回 `scripts\un.py` 这类反斜杠）；修复后 PASS；新增列表回归测试 `TestWalkSkillFilesSlashPaths` |
-| 11 | `port/11-ui-refresh` | `1dd98d5` | `2d8e8a5` + `b79fb75` | 前端四处手动刷新按钮：流量页（等流量+host 两个请求都结束再恢复）、工具执行、LLM 录制、系统日志（拉 /api/logs 快照按 seq 合并，上限 5000 行） | `tsc --noEmit` 通过；`NEXT_EXPORT=1 next build` 通过；dist 内 chunk 含「刷新流量记录」；exe 52,151,296 字节；起服 health=200 且线上 chunk 命中该按钮，验证后已停服 |
+| 流量正文解码 | `port/01-traffic-decode` | `79f2fed` | `95f9f05` | 流量正文按 Content-Encoding 解码（gzip/deflate/zlib/br/zstd，多重编码），原始字节仍存盘，索引/预览用解码视图 | `go test ./traffic/` ok；经 8788 抓 gzip 响应，`_index` 中响应体前两字节为 `1f 8b`，FTS 命中 `abc123`、`内网测` |
+| 主机环境说明 + DSL 放宽 | `port/02-host-profile-dsl` | `bdf8d24` | `9de2728` | 启动时探测本机环境（PowerShell 版本、curl 别名、curl.exe 路径、临时目录）拼进 Bash 工具说明；资产 DSL 允许运算符两侧空格、`contains`/`=~` 模糊匹配、引号取值、报错带示例 | `go build ./...`=0；4 条 DSL 测试通过；真实探测输出 `len=792`，识别 PowerShell 5.1、curl 为 Invoke-WebRequest 别名 |
+| 长期记忆工具 | `port/03-memory-tools` | `8643b01` | `542be7f` | worker 记忆四工具（列目录/搜索/读取/保存），中文双字滑窗检索，纯中文名用哈希当文件名防覆盖，写完重建 MEMORY.md | 6 条记忆测试全过；`go build`=0；新 exe 启动 `health=200` |
+| 报错沉淀本机经验 | `port/04-host-lessons` | `86a840d` | `3b393cd` | 已知工具报错按签名沉淀（去重计数），只存签名与提示、不存原始命令/输出，把命中最高的 6 条追加到 Bash 描述 | 5 条测试通过；真实调用记录两次同一 `head` 报错 → `count=2`、经验提示生成、`lessons.json` 落盘 |
+| 统一提交报告模板 | `port/05-report` | `f956f46` → `d29b10c` / 前端提交 | `67dc00c` + `8b6ef32`（**已补齐**） | 统一提交报告模板（漏洞名称/等级/类型/URL + 详细描述/复现步骤/修复方案）；字数预算（350/200/400 字）；技术附录用 `<!-- SERIES:TECHNICAL -->` 切分，不导出；新增 `findings.report_detail` | 报告格式测试（含 11 条预算子用例）全过；新 exe 启动后 `findings` 表出现 `report_detail`（启动时自动迁移）；`GetFinding` 读回新列正常 |
+| 收尾闸门改用 hook | `port/06-settlement-hook` | `2a971ee` | `77d45b0` | 收尾相位不再把 Bash 从工具清单删掉（会改写请求前缀、缓存全失效）；改为 gate 观察每次请求，命中收尾提示词后由 `steerHooks.PreToolUse` 拒绝执行，工具清单全程不变 | 6 条单测（置位/前缀/PromptByReason/惰性/包装透传/ctx）；`go build ./...`=0；`go test ./agent/ ./db/` 全绿 |
+| 主代理取消意图 | `port/07-intent-cancel` | `caa4a13` → `e5286c0` | `14a567b`（**已补齐**） | 新增 `cancel_intent` 工具（默认只绑 mainagent）；`Engine.StopIntent`：运行中 worker 用 `AbortCancelledByUser` 取消并轮询等待退出注册表（15s 上限），等待/暂停/阻塞意图直接置 `stopped`，产出保留，写 mainagent 活动记录 | build + vet 干净；`go test ./agent/ ./db/` 全绿；未搬 SERIES 的 355 行 server 级测试 |
+| 禁报规则 | `port/08-finding-suppression` | `a01fd25` | `78ab23f`（**部分**） | 新增 `finding_suppressions` 表（任务级：标题/类型/摘要/资产/原因/撤销时间）；删除漏洞时快照并写规则；`RecordFindingTx` 插入前拦截，命中返回 `ErrFindingSuppressed` 与解除指引；新增 `GET /api/finding-suppressions` 与 `DELETE /api/finding-suppressions/{id}` | 新 exe 启动后 5437 库中 `finding_suppressions` 表存在、`health=200`；3 条匹配单测（同标题命中/类型不同不命中/撤销不命中/共享资产命中/无交集不命中）通过 |
+| Windows Bash 提示改写 | `port/09-bash-prompt` | `baf9ef2` | `f5a1b6e` + `092a081`（**用户已确认保留改写版**） | Windows 下把 Bash 工具的扩展说明换成改写版：删掉 `&&` 串联和 heredoc 两条 PowerShell 5.1 会报错的写法，保留“复杂任务先写脚本再执行、避免需要交互输入的命令”；`AugmentTools` 末尾统一套用，覆盖 worker/planner/mainagent/chat/reporter 全部入口 | 3 条测试通过（按系统判断、渲染后的 schema 不含 Unix 写法且基础描述/替换建议都在、只动 Bash 不动其它工具） |
+| 技能路径统一斜杠 | `port/10-skill-path` | `7b9d5f5` | `b4e19b7` | 技能子目录路径统一 `/`：`skillRelPath` 改用 `path.Clean`/`path.IsAbs`，`walkSkillFiles` 返回前做 `filepath.ToSlash` | 修复前 `go test ./server -run TestSkillRelPath` 在本机 FAIL（子目录用例返回 `scripts\un.py` 这类反斜杠）；修复后 PASS；新增列表回归测试 `TestWalkSkillFilesSlashPaths` |
+| 界面手动刷新按钮 | `port/11-ui-refresh` | `1dd98d5` | `2d8e8a5` + `b79fb75` | 前端四处手动刷新按钮：流量页（等流量+host 两个请求都结束再恢复）、工具执行、LLM 录制、系统日志（拉 /api/logs 快照按 seq 合并，上限 5000 行） | `tsc --noEmit` 通过；`NEXT_EXPORT=1 next build` 通过；dist 内 chunk 含「刷新流量记录」；exe 52,151,296 字节；起服 health=200 且线上 chunk 命中该按钮，验证后已停服 |
 
 ## 二、明确跳过（用户拍板，暂不做）
 
