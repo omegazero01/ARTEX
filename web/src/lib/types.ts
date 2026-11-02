@@ -911,6 +911,7 @@ export interface TrafficHost {
 // ---- App settings (runtime toggles) ----
 export interface Settings {
   traffic_capture: boolean;
+  traffic_retention_days?: number; // 流量保留天数；0=永久保留（默认）
   agent_traffic_binding: boolean; // Agent 自动绑定流量证据，默认关闭；不影响人工绑定
   llm_record: boolean; // LLM 录制开关（默认关）；关闭时不记录任何 LLM 调用
   // Web search. brave_key_set / tavily_key_set reflect whether a key is stored

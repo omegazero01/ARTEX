@@ -231,8 +231,9 @@ type Manager struct {
 	mu          sync.RWMutex
 	tasks       map[string]*Task
 	active      string
-	trafficOn   bool // 流量捕获开关（默认关；settings.traffic_capture）
-	llmRecOn    bool // LLM 录制开关（默认关；settings.llm_record）
+	trafficOn   bool  // 流量捕获开关（默认关；settings.traffic_capture）
+	retention   int64 // 流量保留天数（0=永久；settings.traffic_retention_days）
+	llmRecOn    bool  // LLM 录制开关（默认关；settings.llm_record）
 	// 联网搜索开关与来源（默认关；settings.web_search_*）。brave-free 需要 braveKey；tavily 需要 tavilyKey。
 	// webSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关。
 	webSearchOn      bool
@@ -250,6 +251,7 @@ type Manager struct {
 // Settings keys the UI toggles at runtime.
 const (
 	settingTrafficCapture      = "traffic_capture"
+	settingTrafficRetention    = "traffic_retention_days" // 流量保留天数；0=永久保留（默认）
 	settingAgentTrafficBinding = "agent_traffic_binding"
 	settingWebSearchOn         = "web_search_enabled"
 	settingWebSearchBackend    = "web_search_backend"
@@ -420,6 +422,17 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	// Asset auto-completion engine (§5): HTTP probes routed through the recording
 	// proxy (via m.ProxyAddr, which honors the traffic-capture toggle).
 	m.trafficOn = pg.GetBool(settingTrafficCapture, false)
+	// 流量保留天数（默认 0=永久）。推给 traffic 的每小时清理循环；非法值忽略。
+	if raw, ok, _ := pg.GetSetting(settingTrafficRetention); ok {
+		if days, convErr := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); convErr == nil && days >= 0 && days <= 3650 {
+			m.retention = days
+			if m.traffic != nil {
+				m.traffic.SetRetention(days)
+			}
+		} else {
+			log.Printf("[traffic] 保留期设置 %q 无效，按永久保留处理", raw)
+		}
+	}
 	// LLM 录制开关（默认关）。录制器每次调用时读取此标志。
 	m.llmRecOn = pg.GetBool(settingLLMRecord, false)
 	// Load persisted web-search config (default: off, ddgs).
@@ -458,6 +471,32 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 
 // TrafficEnabled reports whether traffic capture is on (default off). When off,
 // no proxy/traffic tools/prompt are injected into agents (nothing is recorded).
+// TrafficRetentionDays reports how long recorded exchanges are kept (0 = forever).
+func (m *Manager) TrafficRetentionDays() int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.retention
+}
+
+// SetTrafficRetention validates, persists and applies the retention window. The
+// sweeper reads it on its next hourly tick, so no agent rebuild is needed.
+func (m *Manager) SetTrafficRetention(days int64) error {
+	if days < 0 || days > 3650 {
+		return fmt.Errorf("保留天数须在 0..3650 之间（0=永久）")
+	}
+	if err := m.pg.SetSetting(settingTrafficRetention, strconv.FormatInt(days, 10)); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.retention = days
+	tr := m.traffic
+	m.mu.Unlock()
+	if tr != nil {
+		tr.SetRetention(days)
+	}
+	return nil
+}
+
 func (m *Manager) TrafficEnabled() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

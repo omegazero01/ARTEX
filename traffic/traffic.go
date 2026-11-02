@@ -30,6 +30,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/klauspost/compress/zstd"
+
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
@@ -170,6 +172,48 @@ type Traffic struct {
 	// transparent-passthrough paths honor it (go-mitmproxy's getUpstreamConn),
 	// so no host escapes it. Hot-swappable at runtime via SetUpstreamProxy.
 	upstream atomic.Pointer[url.URL]
+	// retentionDays bounds how long recorded exchanges stay on disk (0 = keep
+	// forever). The sweeper runs hourly once set.
+	retentionDays atomic.Int64
+	// blobCache keeps the last decompressed blobs (≤2, ≤8 MiB each) so paging
+	// through a compressed body does not decode it from the start every time.
+	blobCacheMu sync.Mutex
+	blobCache   []cachedBlob
+}
+
+const maxCachedBlob = 8 << 20
+
+type cachedBlob struct {
+	hash string
+	data []byte
+}
+
+func (t *Traffic) cachedBlob(hash string) []byte {
+	t.blobCacheMu.Lock()
+	defer t.blobCacheMu.Unlock()
+	for _, entry := range t.blobCache {
+		if entry.hash == hash {
+			return entry.data // immutable after insertion
+		}
+	}
+	return nil
+}
+
+func (t *Traffic) cacheBlob(hash string, data []byte) {
+	if len(data) == 0 || len(data) > maxCachedBlob {
+		return
+	}
+	t.blobCacheMu.Lock()
+	defer t.blobCacheMu.Unlock()
+	for _, entry := range t.blobCache {
+		if entry.hash == hash {
+			return
+		}
+	}
+	t.blobCache = append(t.blobCache, cachedBlob{hash: hash, data: data})
+	if len(t.blobCache) > 2 {
+		t.blobCache = t.blobCache[1:]
+	}
 }
 
 // Open initializes the traffic tree, blob store and SQLite index under dir.
@@ -228,6 +272,7 @@ func Open(dir, addr string) (*Traffic, error) {
 	})
 	p.AddAddon(&sink{t: t})
 	t.proxy = p
+	go t.retentionLoop()
 	return t, nil
 }
 
@@ -558,28 +603,41 @@ func (t *Traffic) spillWithIndex(body []byte, contentType string, indexBody []by
 		return clipBytes(body, blobPreview)
 	}
 	if len(body) <= maxInlineBody {
-		return storedBody{inline: body, index: indexText()}
+		return storedBody{inline: compressInline(body), index: indexText()}
 	}
 
 	sum := sha256.Sum256(body)
 	h := hex.EncodeToString(sum[:])
 	// One bucket level (256 buckets) is enough to keep any single directory small;
 	// the store only ever holds bodies above maxInlineBody, deduplicated by hash.
+	// The hash names the plaintext, so a compressed frame and a raw copy of the
+	// same body are one identity and either extension satisfies a lookup.
 	blobDir := filepath.Join(t.dir, "_blobs", "sha256", h[:2])
 	if err := os.MkdirAll(blobDir, 0o755); err != nil {
 		log.Printf("[traffic] 创建 blob 目录失败：%v", err)
-		return storedBody{inline: preview(), index: indexText()}
+		return storedBody{inline: compressInline(preview()), index: indexText()}
 	}
-	blobPath := filepath.Join(blobDir, h+".bin")
+	packed, compressed := encodeBlob(body)
+	ext := ".bin"
+	if compressed {
+		ext = ".zst"
+	}
+	other := ".zst"
+	if compressed {
+		other = ".bin"
+	}
+	blobPath := filepath.Join(blobDir, h+ext)
 	if _, err := os.Stat(blobPath); os.IsNotExist(err) {
-		if err := os.WriteFile(blobPath, body, 0o644); err != nil {
-			log.Printf("[traffic] 写 blob %s 失败：%v", h, err)
-			return storedBody{inline: preview(), index: indexText()}
+		if _, altErr := os.Stat(filepath.Join(blobDir, h+other)); altErr != nil {
+			if err := os.WriteFile(blobPath, packed, 0o644); err != nil {
+				log.Printf("[traffic] 写 blob %s 失败：%v", h, err)
+				return storedBody{inline: compressInline(preview()), index: indexText()}
+			}
 		}
 	}
 	sb := storedBody{hash: h, index: indexText()}
 	if text {
-		sb.inline = preview()
+		sb.inline = compressInline(preview())
 	} else {
 		sb.inline = []byte(binaryTag(contentType, body))
 	}
@@ -715,6 +773,7 @@ func (t *Traffic) blobPath(hash string) (string, error) {
 		return "", fmt.Errorf("非法的 blob hash")
 	}
 	for _, p := range []string{
+		filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash+".zst"),
 		filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash+".bin"),
 		filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash[2:4], hash+".bin"),
 	} {
@@ -725,10 +784,44 @@ func (t *Traffic) blobPath(hash string) (string, error) {
 	return "", fmt.Errorf("blob %s 不存在", hash)
 }
 
-// Blob opens a spilled body for streaming; the caller must close the file.
-// Streaming matters here: the driver exposes no incremental BLOB API, so keeping
-// large bodies on disk is what lets them be served without loading them whole.
-func (t *Traffic) Blob(hash string) (*os.File, int64, error) {
+// readBlobBytes loads one blob as plaintext: ".zst" frames are decoded, legacy
+// ".bin" files pass through. Bodies above the proxy's streaming threshold are
+// never recorded, so the decoded size is bounded (~5MiB) and holding it in
+// memory for a reader is safe.
+func (t *Traffic) readBlobBytes(hash string) ([]byte, error) {
+	p, err := t.blobPath(hash)
+	if err != nil {
+		return nil, err
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return nil, err
+	}
+	if st.Size() > maxBlobBody {
+		return nil, fmt.Errorf("blob exceeds %d bytes", maxBlobBody)
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil, err
+	}
+	return decodeBlob(data, strings.HasSuffix(p, ".zst"))
+}
+
+// Blob exposes a spilled body as plaintext for streaming; the caller must
+// close the reader.
+func (t *Traffic) Blob(hash string) (io.ReadCloser, int64, error) {
+	data, err := t.readBlobBytes(hash)
+	if err != nil {
+		return nil, 0, err
+	}
+	return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
+}
+
+// BlobRange reads at most length bytes of a blob from offset, and reports the
+// blob's total size. Used to page through a large body without pulling all of it
+// into the model's context. Compressed frames are decoded incrementally and the
+// decompressed body is cached (≤8 MiB) so repeated pages are cheap.
+func (t *Traffic) BlobRange(hash string, offset, length int64) (data []byte, total int64, err error) {
 	p, err := t.blobPath(hash)
 	if err != nil {
 		return nil, 0, err
@@ -737,38 +830,82 @@ func (t *Traffic) Blob(hash string) (*os.File, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	st, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, 0, err
-	}
-	return f, st.Size(), nil
-}
-
-// BlobRange reads at most length bytes of a blob from offset, and reports the
-// blob's total size. Used by the agent tool to page through a large body without
-// pulling all of it into the model's context.
-func (t *Traffic) BlobRange(hash string, offset, length int64) (data []byte, total int64, err error) {
-	f, size, err := t.Blob(hash)
-	if err != nil {
-		return nil, 0, err
-	}
 	defer f.Close()
 	if offset < 0 {
 		offset = 0
 	}
-	if offset >= size {
-		return nil, size, nil
+	if offset > maxBlobBody {
+		offset = maxBlobBody + 1
 	}
-	if length <= 0 || offset+length > size {
-		length = size - offset
+	if length <= 0 || length > maxBlobBody {
+		length = maxBlobBody
 	}
-	buf := make([]byte, length)
-	n, err := f.ReadAt(buf, offset)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, size, err
+	if strings.HasSuffix(p, ".zst") {
+		if cached := t.cachedBlob(hash); cached != nil {
+			size := int64(len(cached))
+			if offset >= size {
+				return nil, size, nil
+			}
+			end := min(offset+length, size)
+			return append([]byte(nil), cached[offset:end]...), size, nil
+		}
 	}
-	return buf[:n], size, nil
+	if !strings.HasSuffix(p, ".zst") {
+		st, err := f.Stat()
+		if err != nil {
+			return nil, 0, err
+		}
+		if st.Size() > maxBlobBody {
+			return nil, 0, fmt.Errorf("blob exceeds %d bytes", maxBlobBody)
+		}
+		if offset >= st.Size() {
+			return nil, st.Size(), nil
+		}
+		length = min(length, st.Size()-offset)
+		buf := make([]byte, length)
+		n, err := f.ReadAt(buf, offset)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, st.Size(), err
+		}
+		return buf[:n], st.Size(), nil
+	}
+	decoder, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxBlobBody))
+	if err != nil {
+		return nil, 0, err
+	}
+	defer decoder.Close()
+	buf := make([]byte, 32*1024)
+	cacheEligible := true
+	var cacheData []byte
+	for {
+		n, readErr := decoder.Read(buf)
+		if total+int64(n) > maxBlobBody {
+			return nil, 0, fmt.Errorf("blob exceeds %d bytes", maxBlobBody)
+		}
+		start := max(offset, total)
+		end := min(offset+length, total+int64(n))
+		if start < end {
+			data = append(data, buf[start-total:end-total]...)
+		}
+		if cacheEligible {
+			if total+int64(n) <= maxCachedBlob {
+				cacheData = append(cacheData, buf[:n]...)
+			} else {
+				cacheEligible = false
+				cacheData = nil
+			}
+		}
+		total += int64(n)
+		if errors.Is(readErr, io.EOF) {
+			if cacheEligible {
+				t.cacheBlob(hash, cacheData)
+			}
+			return data, total, nil
+		}
+		if readErr != nil {
+			return nil, 0, readErr
+		}
+	}
 }
 
 // ExchangeMeta is one row of the index (returned by Search).
@@ -979,6 +1116,7 @@ func (t *Traffic) Get(id string) (req, resp string, err error) {
 FROM exchange_bodies b JOIN exchanges e ON e.id=b.id WHERE b.id=?`, id).
 		Scan(&reqHead, &reqBody, &reqBlob, &respHead, &respBody, &respBlob, &reqLen, &respLen)
 	if err == nil {
+		reqBody, respBody = decompressInline(reqBody), decompressInline(respBody)
 		// Inline bodies are stored exactly as captured, so apply HTTP
 		// Content-Encoding here as well as at index time. A spilled body's
 		// inline column is already a decoded preview; its blob pointer is left
@@ -1097,6 +1235,86 @@ func (t *Traffic) DeleteHost(host string) (int64, error) {
 		}
 	}
 	return n, nil
+}
+
+// RetentionDays reports the configured retention window (0 = keep forever).
+func (t *Traffic) RetentionDays() int64 { return t.retentionDays.Load() }
+
+// SetRetention bounds how long recorded exchanges stay on disk. Zero disables
+// the sweeper (keep forever).
+func (t *Traffic) SetRetention(days int64) {
+	if days < 0 || days > 3650 {
+		return
+	}
+	t.retentionDays.Store(days)
+}
+
+// retentionLoop drops exchanges older than the retention window once an hour.
+// Deletion reuses the same four-table path and background reclamation as a
+// manual host delete, so space is actually returned to the filesystem.
+func (t *Traffic) retentionLoop() {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-t.closed:
+			return
+		case <-ticker.C:
+			days := t.retentionDays.Load()
+			if days <= 0 {
+				continue
+			}
+			if days > 3650 { // defense against a corrupt runtime setting
+				log.Printf("[traffic] 无效保留期 %d 天，跳过清理", days)
+				continue
+			}
+			cutoff := time.Now().UTC().AddDate(0, 0, -int(days)).Unix()
+			if n, err := t.DeleteOlderThan(cutoff); err != nil {
+				log.Printf("[traffic] 保留期清理失败：%v", err)
+			} else if n > 0 {
+				log.Printf("[traffic] 保留期 %d 天：清理 %d 条过期流量", days, n)
+			}
+		}
+	}
+}
+
+// DeleteOlderThan removes every exchange recorded before the unix cutoff and
+// returns how many went away. Reclamation and blob GC run afterwards, exactly
+// like a manual host delete.
+func (t *Traffic) DeleteOlderThan(cutoff int64) (int64, error) {
+	const batchSize = 500
+	var total int64
+	for !t.stopping() {
+		t.wmu.Lock()
+		tx, err := t.db.Begin()
+		if err != nil {
+			t.wmu.Unlock()
+			return total, err
+		}
+		// Every subquery sees the same oldest bounded window inside this
+		// transaction. The recorder gets the write lock back between batches.
+		n, err := t.deleteWhere(tx, "id IN (SELECT id FROM exchanges WHERE ts<? ORDER BY ts,id LIMIT ?)", cutoff, batchSize)
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+		t.wmu.Unlock()
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if n < batchSize {
+			break
+		}
+	}
+	if total > 0 {
+		t.reclaim()
+		if err := t.gcBlobs(); err != nil {
+			return total, err
+		}
+	}
+	return total, nil
 }
 
 // DeleteAll removes every recorded exchange — the page's clear-everything

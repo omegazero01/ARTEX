@@ -3309,7 +3309,9 @@ func (s *Server) settingsPayload() map[string]any {
 		concLimit = defaultConcurrencyLimit // 关闭时也回显一个合理默认值给 UI
 	}
 	return map[string]any{
-		"traffic_capture":          s.m.TrafficEnabled(),
+		"traffic_capture":        s.m.TrafficEnabled(),
+		"traffic_retention_days": s.m.TrafficRetentionDays(), // 流量保留天数；0=永久
+
 		"agent_traffic_binding":    s.m.pg.GetBool(settingAgentTrafficBinding, false),
 		"llm_record":               s.m.LLMRecordEnabled(),
 		"web_search_enabled":       on,
@@ -3379,9 +3381,10 @@ func (s *Server) pgDetectPython(w http.ResponseWriter, r *http.Request) {
 // off, agents get no proxy config, no traffic tools, and no proxy prompt content.
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		TrafficCapture      *bool `json:"traffic_capture"`
-		AgentTrafficBinding *bool `json:"agent_traffic_binding"`
-		LLMRecord           *bool `json:"llm_record"` // LLM 录制开关（默认关）；即时生效，无需重建 agent
+		TrafficCapture      *bool  `json:"traffic_capture"`
+		TrafficRetention    *int64 `json:"traffic_retention_days"` // 流量保留天数；0=永久
+		AgentTrafficBinding *bool  `json:"agent_traffic_binding"`
+		LLMRecord           *bool  `json:"llm_record"` // LLM 录制开关（默认关）；即时生效，无需重建 agent
 		// Web search. WebSearchEnabled/Backend toggle the tool + backend; BraveKey/TavilyKey
 		// are optional — omit (null) to leave a stored key untouched, send "" to clear.
 		WebSearchEnabled *bool   `json:"web_search_enabled"`
@@ -3535,6 +3538,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		changed = true
+	}
+	if req.TrafficRetention != nil {
+		if err := s.m.SetTrafficRetention(*req.TrafficRetention); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
 	}
 	if req.GlobalProxy != nil {
 		// Validation failure (bad scheme/host) is a client error, not a 500.

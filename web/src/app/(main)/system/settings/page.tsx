@@ -19,6 +19,8 @@ import { UpdateCard } from "./_components/update-card";
 
 export default function SystemSettingsPage() {
   const [trafficCapture, setTrafficCapture] = React.useState(false);
+  const [retentionDays, setRetentionDays] = React.useState("0");
+  const [savingRetention, setSavingRetention] = React.useState(false);
   const [agentTrafficBinding, setAgentTrafficBinding] = React.useState(false);
   const [webSearch, setWebSearch] = React.useState(false);
   const [backend, setBackend] = React.useState("ddgs");
@@ -48,6 +50,7 @@ export default function SystemSettingsPage() {
 
   const apply = React.useCallback((s: Settings) => {
     setTrafficCapture(!!s.traffic_capture);
+    setRetentionDays(String(s.traffic_retention_days ?? 0));
     setAgentTrafficBinding(!!s.agent_traffic_binding);
     setWebSearch(!!s.web_search_enabled);
     setBackend(s.web_search_backend || "ddgs");
@@ -77,6 +80,23 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => toast.error("保存失败：" + (e as Error).message))
       .finally(() => setSavingWorkers(false));
+  };
+
+  const saveRetention = () => {
+    const n = Number(retentionDays);
+    if (!Number.isInteger(n) || n < 0 || n > 3650) {
+      toast.error("保留天数须为 0..3650 的整数（0=永久保留）");
+      return;
+    }
+    setSavingRetention(true);
+    api
+      .setSettings({ traffic_retention_days: n })
+      .then((s) => {
+        apply(s);
+        toast.success(n === 0 ? "已设为永久保留" : `已保留最近 ${n} 天流量`);
+      })
+      .catch((e) => toast.error("保存失败：" + (e as Error).message))
+      .finally(() => setSavingRetention(false));
   };
 
   const savePython = () => {
@@ -292,6 +312,39 @@ export default function SystemSettingsPage() {
               disabled={!loaded || saving}
               onCheckedChange={toggleTraffic}
             />
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <RadioTowerIcon className="size-4" />
+              流量保留期
+            </CardTitle>
+            <CardDescription>
+              超过设定天数的流量会被自动清理（每小时检查一次）。0 = 永久保留（默认）。清理只删过期流量，不影响漏洞证据与已归档任务。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex items-end gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="traffic-retention" className="text-sm font-normal text-muted-foreground">
+                保留天数
+              </Label>
+              <Input
+                id="traffic-retention"
+                type="number"
+                min={0}
+                max={3650}
+                step={1}
+                value={retentionDays}
+                disabled={!loaded}
+                onChange={(e) => setRetentionDays(e.target.value)}
+                className="w-28"
+              />
+            </div>
+            <Button onClick={saveRetention} disabled={!loaded || savingRetention}>
+              {savingRetention ? "保存中…" : "保存"}
+            </Button>
           </CardContent>
         </Card>
 
