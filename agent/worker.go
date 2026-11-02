@@ -56,17 +56,17 @@ type Worker struct {
 	findingRecorder FindingRecorder
 	// mem, when set, exposes the long-term memory directory as worker tools and
 	// appends the usage hint to the system prompt. nil = memory off.
-	mem  *memory.Store
-	prov llm.Provider
-	model           string
-	workDir         string
-	proxyAddr       string
-	proxyCACert     string            // recording proxy's CA cert path (for WebFetch HTTPS verify)
-	webSearch       WebSearchOpts     // web_search tool backend selection (off by default)
-	tx              *transcript.Store // raw LLM conversation persistence (nil = off)
-	window          int               // context window in tokens (for compaction)
-	windowFn        func() int        // optional dynamic task-chain minimum
-	maxTurns        int               // max agent turns per run (0 = unlimited)
+	mem         *memory.Store
+	prov        llm.Provider
+	model       string
+	workDir     string
+	proxyAddr   string
+	proxyCACert string            // recording proxy's CA cert path (for WebFetch HTTPS verify)
+	webSearch   WebSearchOpts     // web_search tool backend selection (off by default)
+	tx          *transcript.Store // raw LLM conversation persistence (nil = off)
+	window      int               // context window in tokens (for compaction)
+	windowFn    func() int        // optional dynamic task-chain minimum
+	maxTurns    int               // max agent turns per run (0 = unlimited)
 	// runTimeout is the wall-clock budget for the main exploration of one intent
 	// (0 = unlimited). When it fires, the run is cut and a settlement round is
 	// forced so already-identified facts get written back instead of being lost.
@@ -207,17 +207,23 @@ func (w *Worker) SetWebSearch(o WebSearchOpts) { w.webSearch = o }
 // GIT_SSL_CAINFO→git, NODE_EXTRA_CA_CERTS→node; NODE_USE_ENV_PROXY makes Node 24+
 // honor the proxy vars. ALL_PROXY is set too so a socks5 egress proxy (which curl
 // only reads from ALL_PROXY, not HTTP(S)_PROXY) works in the capture-off path.
-// Empty proxyAddr → nil (direct, unchanged env).
+// Independently of the proxy, the curl/wget browser User-Agent entries from
+// ConfigureToolUA are always appended — capture-off sessions keep the default UA.
+// Returns nil only when there is nothing to add at all.
 func proxyEnv(proxyAddr, caCert string) []string {
+	env := append([]string(nil), currentToolUAEnv()...)
 	if proxyAddr == "" {
-		return nil
+		if len(env) == 0 {
+			return nil
+		}
+		return env
 	}
-	env := []string{
-		"HTTP_PROXY=" + proxyAddr, "HTTPS_PROXY=" + proxyAddr,
-		"http_proxy=" + proxyAddr, "https_proxy=" + proxyAddr,
-		"ALL_PROXY=" + proxyAddr, "all_proxy=" + proxyAddr, // socks5 egress: curl reads only this
+	env = append(env,
+		"HTTP_PROXY="+proxyAddr, "HTTPS_PROXY="+proxyAddr,
+		"http_proxy="+proxyAddr, "https_proxy="+proxyAddr,
+		"ALL_PROXY="+proxyAddr, "all_proxy="+proxyAddr, // socks5 egress: curl reads only this
 		"NODE_USE_ENV_PROXY=1", // Node 24+: honor HTTP(S)_PROXY in built-in fetch/http
-	}
+	)
 	if caCert != "" {
 		env = append(env,
 			"SSL_CERT_FILE="+caCert,

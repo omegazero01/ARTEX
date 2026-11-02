@@ -358,6 +358,12 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	// and surfaced in the Bash description on the next run. An empty path would
 	// disable both, so this must run before any task starts.
 	agent.ConfigureHostLessons(filepath.Join(dir, "host", "lessons.json"))
+	// Agent-issued curl/wget default to a browser User-Agent via startup files
+	// under <data>/tool-http (existing files are preserved). Injected into every
+	// Bash session by proxyEnv; an explicit -A on the command line still wins.
+	if err := agent.ConfigureToolUA(filepath.Join(dir, "tool-http")); err != nil {
+		log.Printf("[manager] curl/wget 默认 UA 配置失败（不影响启动）：%v", err)
+	}
 	dsn, source, err := pgdb.DSN()
 	if err != nil {
 		return nil, err
