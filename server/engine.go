@@ -641,6 +641,77 @@ func (e *Engine) KillWork(intentID int64) error {
 	return nil
 }
 
+// workStopWait bounds how long StopIntent waits for the cancelled worker to leave
+// the work registry. The worker's own ctx cancellation aborts the model turn, so
+// this only covers the final state write.
+const workStopWait = 15 * time.Second
+
+// StopIntent cancels one intent on behalf of the user (mainagent's cancel_intent
+// tool). A running work is cancelled and awaited; queued/paused/blocked intents are
+// marked stopped directly. Outputs and lineage are kept either way, and a stopped
+// intent is no longer claimed automatically.
+func (e *Engine) StopIntent(ctx context.Context, taskID, intentID int64, reason string) (string, error) {
+	ri := agent.RunInfoFrom(ctx)
+	if taskID <= 0 || ri.TaskID != taskID || ri.IntentID != 0 || e.m == nil {
+		return "", fmt.Errorf("仅主代理可在当前任务内取消意图（任务上下文不匹配）")
+	}
+	t, ok := e.m.Task(strconv.FormatInt(taskID, 10))
+	if !ok {
+		return "", fmt.Errorf("task not found")
+	}
+	n, err := t.Store.GetNode(intentID)
+	if err != nil {
+		return "", err
+	}
+	if n == nil || n.Kind != db.KindIntent {
+		return "", fmt.Errorf("intent_id 必须是本任务的意图")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "用户要求取消该意图"
+	}
+	switch n.State {
+	case "stopped", "cancelled", "deleted":
+		return n.State, nil
+	case "open", "paused", "blocked":
+		if err := t.Store.SetIntentState(intentID, "stopped"); err != nil {
+			return "", err
+		}
+	case "running":
+		e.workMu.Lock()
+		run := e.work[intentID]
+		e.workMu.Unlock()
+		if run != nil {
+			run.cancel(agent.AbortCancelledByUser)
+		}
+		deadline := time.Now().Add(workStopWait)
+		for time.Now().Before(deadline) {
+			e.workMu.Lock()
+			_, alive := e.work[intentID]
+			e.workMu.Unlock()
+			if !alive {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+		if err := t.Store.SetIntentState(intentID, "stopped"); err != nil {
+			return "", err
+		}
+	default:
+		return "", fmt.Errorf("当前状态 %s 不能取消", n.State)
+	}
+	iid := intentID
+	e.emitActivity(t, db.Activity{Worker: "mainagent", NodeID: &iid, Kind: "text",
+		Summary: fmt.Sprintf("用户取消意图 #%d", intentID),
+		Detail:  "中断原因：cancelled_by_user；取消原因：" + reason + "。意图与已有产出保留，不再自动领取。"})
+	e.touch(t.ID)
+	return "stopped", nil
+}
+
 // Broadcaster exposes the engine's live activity pub/sub (used by the SSE handler).
 func (e *Engine) Broadcaster() *Broadcaster { return e.bc }
 

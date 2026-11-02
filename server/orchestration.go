@@ -78,6 +78,7 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 		s.toolUpdateFindingReport(),
 		s.toolGetFindingTraffic(),
 		s.toolBindFindingTraffic(),
+		s.toolCancelIntent(),
 	}
 }
 
@@ -457,6 +458,36 @@ func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 		})
 }
 
+// toolCancelIntent lets the main agent cancel one intent on the user's explicit
+// request. It is bound to mainagent only by default; the engine additionally
+// validates the run context (role, task, no intent scope).
+func (s *Server) toolCancelIntent() actool.CoreTool {
+	return wrTool("cancel_intent",
+		"按用户明确要求取消当前任务的一条意图：等待队列里的直接退出，运行中的会停止 worker 并等待其收尾；意图与已有产出保留，状态变为 stopped，不再自动领取。只在本任务内、且用户明确要求取消时才调用；不要用它代替正常完成任务。",
+		objSchema(map[string]any{
+			"task_id":   map[string]any{"type": "integer", "description": "当前任务 id（必须与运行上下文一致）"},
+			"intent_id": map[string]any{"type": "integer", "description": "要取消的意图 id"},
+			"reason":    strParam("取消原因（可选，会写入活动记录）"),
+		}, "task_id", "intent_id"),
+		func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
+			var a struct {
+				TaskID   int64           `json:"task_id"`
+				IntentID json.RawMessage `json:"intent_id"`
+				Reason   string          `json:"reason"`
+			}
+			_ = json.Unmarshal(raw, &a)
+			iid := parseProfileID(a.IntentID)
+			if iid <= 0 {
+				return actool.Errorf("intent_id 无效"), nil
+			}
+			state, err := s.engine.StopIntent(ctx, a.TaskID, iid, a.Reason)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			return jsonResult(map[string]any{"intent_id": iid, "state": state, "cancelled": true})
+		})
+}
+
 // deriveTaskStatus mirrors listTasks' status derivation for the list_tasks tool.
 func (s *Server) deriveTaskStatus(t *Task) string {
 	lifecycle := t.lifecycleSnapshot()
@@ -483,6 +514,9 @@ func (s *Server) seedOrchestrationTools() {
 		bindings := autoAgents
 		if t.Name() == "bind_finding_traffic" {
 			bindings = json.RawMessage(`["reporter"]`)
+		}
+		if t.Name() == "cancel_intent" {
+			bindings = json.RawMessage(`["mainagent"]`)
 		}
 		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, bindings)
 	}
