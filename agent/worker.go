@@ -438,9 +438,9 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// 任务级 deadline(经 ctx 注入)夹逼本 run 的墙钟预算 + 决定收尾词(见 taskclock.go)。
 	tc := taskClockFrom(ctx)
 	maxDur, clamped := clampMaxDuration(tc.DeadlineUnix, w.runTimeout)
-	settle := wrapupSettlement("worker", []string{"Bash"})
+	settle := wrapupSettlement("worker", nil)
 	if tc.DeadlineUnix > 0 {
-		settle = wrapupSettlementForTask("worker", []string{"Bash"}, clamped)
+		settle = wrapupSettlementForTask("worker", nil, clamped)
 	}
 	opts := agentcore.Options{
 		Provider:        w.prov,
@@ -484,6 +484,12 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		NonStreaming:  w.nonStreaming(),                       // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:     w.maxTokens(),                          // 0 = 不发上限,由服务端默认值决定
 	}
+	// 收尾相位不再隐藏 Bash（Settlement.DisabledTools 会改写请求前部的工具清单，
+	// 前缀一变整段对话的缓存就失效）。改成：工具清单全程不动，由 hook 在收尾期拒绝执行。
+	// gate 观察每次模型请求，命中收尾提示词后把 Bash 标成不可执行；ctx 带下去给 hooks。
+	gate := NewSettlementGate(settle, "Bash")
+	gate.WrapDeps(&opts.Deps, w.prov)
+	ctx = WithSettlementGate(ctx, gate)
 	if hooks != nil { // typed-nil guard: only set when concrete (avoids harness panic)
 		opts.Hooks = hooks
 	}

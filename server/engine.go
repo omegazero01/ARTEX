@@ -576,6 +576,9 @@ func isThinkingOnlyTurn(messages []llm.Message) bool {
 }
 
 func (h steerHooks) PreToolUse(ctx context.Context, name string, input []byte) (bool, string, []byte) {
+	if agent.SettlementBlocks(ctx, name) {
+		return true, "【收尾相位】本次 run 的预算已用完，不能再执行命令（工具仍保留在清单里以保持前缀缓存，但已禁用）。请把已识别的结论/事实/漏洞直接落库，并用一句话总结。", nil
+	}
 	if msg, ok := h.drain(); ok {
 		return true, "【规划者实时纠偏】" + msg +
 			"\n（这是规划者对本意图的即时指令；本次工具调用未执行，请据此调整下一步。若与你当前打算冲突，以此为准。）", nil
