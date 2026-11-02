@@ -465,7 +465,7 @@ export default function MCPPage() {
                 <Badge variant="outline" className="uppercase">
                   {s.transport}
                 </Badge>
-                <Badge variant="secondary">{s.calls ?? 0} 次调用</Badge>
+                <Badge variant="secondary">调用 {s.calls ?? 0}</Badge>
                 <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                   <Switch
                     checked={s.enabled}
@@ -487,14 +487,6 @@ export default function MCPPage() {
               <p className="text-muted-foreground text-sm">
                 {s.tools && s.tools.length > 0 ? `${s.tools.length} 个工具` : "尚未发现工具"}
               </p>
-              {s.last_used && (
-                <p className="text-muted-foreground text-xs">
-                  最近使用 {new Date(s.last_used).toLocaleString()}
-                  {s.usage_agents && s.usage_agents.length > 0
-                    ? ` · ${s.usage_agents.join("、")}`
-                    : ""}
-                </p>
-              )}
               <div className="grid gap-2" onClick={(e) => e.stopPropagation()}>
                 <span className="text-muted-foreground text-xs">可见性（按 Agent 授权）</span>
                 <div className="flex flex-wrap gap-x-4 gap-y-2">

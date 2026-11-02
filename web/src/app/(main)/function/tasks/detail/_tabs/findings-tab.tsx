@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
 import { api } from "@/lib/api";
 import { useStoredSortPreference } from "@/lib/sort-preference";
 import { statusMeta } from "@/lib/status";
@@ -248,16 +249,15 @@ export function FindingsTab({ taskId }: { taskId: string }) {
           {selectedIds.size > 0 && <span className="shrink-0">已选 {selectedIds.size} 条</span>}
           <Button
             type="button"
-            size="sm"
-            variant="outline"
-            className="h-7 shrink-0"
+            size="icon"
+            variant="ghost"
+            className="size-7 shrink-0"
             onClick={() => void exportSelected()}
             disabled={exporting || selectedIds.size === 0}
-            aria-label="导出选中的提交报告"
-            title="按提交版模板导出选中发现（一漏洞一 .md，打包 zip）"
+            aria-label="导出选中发现"
+            title="选中发现后导出"
           >
-            <DownloadIcon className="size-3.5" />
-            {exporting ? "导出中…" : "导出提交报告"}
+            {exporting ? <Spinner /> : <DownloadIcon className="size-3.5" />}
           </Button>
           <button
             type="button"
