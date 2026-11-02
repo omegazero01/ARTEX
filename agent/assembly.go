@@ -64,6 +64,9 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 	for i, t := range out {
 		out[i] = guardPanic(t)
 	}
+	// Host-specific prompt corrections come last: they must see the final tool
+	// objects (DB description overrides and the panic guard both replace tools).
+	out = applyHostPromptOverrides(out)
 	return out, def, cleanup
 }
 

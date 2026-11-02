@@ -240,3 +240,51 @@ func TestSkillNameFromFrontmatterQuoted(t *testing.T) {
 		t.Fatalf("name = %q, want 中文技能", got)
 	}
 }
+
+// TestWalkSkillFilesSlashPaths is the Windows regression guard: filepath.Rel
+// returns a backslash-separated name there, the client echoes that back, and
+// skillRelPath refuses backslashes — so files in subdirectories were listed but
+// could not be read or saved.
+func TestWalkSkillFilesSlashPaths(t *testing.T) {
+	root := t.TempDir()
+	mustWrite := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir %q: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %q: %v", rel, err)
+		}
+	}
+	mustWrite("SKILL.md", "---\nname: demo\n---\n")
+	mustWrite("scripts/run.sh", "#!/bin/sh\necho hi\n")
+	mustWrite("参考/中文说明.md", "x")
+
+	entries, err := walkSkillFiles(root)
+	if err != nil {
+		t.Fatalf("walkSkillFiles: %v", err)
+	}
+	got := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if strings.Contains(e, `\`) {
+			t.Errorf("entry %q uses a backslash; skill paths must be / separated", e)
+		}
+		got[e] = true
+	}
+	for _, want := range []string{"SKILL.md", "scripts/", "scripts/run.sh", "参考/", "参考/中文说明.md"} {
+		if !got[want] {
+			t.Errorf("walkSkillFiles missing %q (got %v)", want, entries)
+		}
+	}
+	// Whatever the list endpoint returns must pass the check the read/write
+	// endpoints apply — that round trip is exactly what broke on Windows.
+	for _, e := range entries {
+		if strings.HasSuffix(e, "/") {
+			continue
+		}
+		if _, msg := skillRelPath(e); msg != "" {
+			t.Errorf("skillRelPath(%q) rejected a path the server itself listed: %s", e, msg)
+		}
+	}
+}

@@ -115,3 +115,32 @@ func hostClipRunes(s string, max int) string {
 	}
 	return string(r[:max]) + "…"
 }
+
+// windowsBashPrompt replaces the SDK's extended Bash prompt on Windows hosts.
+// The SDK text tells the model to "chain steps with && or ;" and to "pass
+// multi-line scripts or heredocs"; Windows PowerShell 5.1 answers `&&` with
+// "The token '&&' is not a valid statement separator" and `<` with "The operator
+// '<' is reserved for future use". Those failures are exactly what the recorded
+// host lessons keep reporting.
+//
+// Unlike emptying the prompt outright, this keeps the two pieces of SDK advice
+// that still apply on every host — prefer a short script over one mega command,
+// and avoid commands that need interactive input — because dropping them would
+// cost real capability (script-based probing, and knowing when to switch to the
+// interactive shell tool).
+const windowsBashPrompt = "The command runs through Windows PowerShell, so do not use && (write separate statements separated by ; instead) and do not use '<' for multi-line input. For multi-line scripts, write the script to a file and run that file. Pipes are supported and separate statements with ; work. For anything beyond a simple one-liner — loops, parsing, string/JSON handling, HTTP logic, computation — prefer writing a short script (Python, Node, PowerShell, etc.) to a file and executing it rather than forcing everything into a single command. A timeout (default 120s, max 600s) applies. Avoid commands needing interactive input."
+
+// BashPromptOverride returns the text that should replace the Bash tool's
+// extended prompt on this host (norma renders the model-facing description as
+// Description + "\n\n" + Prompt). ok=false means "keep the SDK prompt
+// unchanged" (non-Windows hosts).
+func BashPromptOverride() (string, bool) {
+	return bashPromptOverrideFor(runtime.GOOS)
+}
+
+func bashPromptOverrideFor(goos string) (string, bool) {
+	if goos != "windows" {
+		return "", false
+	}
+	return windowsBashPrompt, true
+}

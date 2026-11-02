@@ -199,3 +199,39 @@ func isEmptyJSON(raw json.RawMessage) bool {
 	s := string(raw)
 	return s == "null" || s == `""`
 }
+
+// promptOverrideTool replaces a tool's extended Prompt text. norma renders the
+// model-facing description as Description() + "\n\n" + Prompt() (see
+// Registry.Schemas), so Prompt() is the only seam for dropping or rewording
+// SDK guidance that hard-codes Unix shell syntax.
+type promptOverrideTool struct {
+	actool.CoreTool
+	prompt string
+}
+
+// OverrideToolPrompt returns t with its extended Prompt replaced by prompt
+// (empty = no extended text at all). Everything else, including Call and
+// PrepareInput, keeps delegating to t.
+func OverrideToolPrompt(t actool.CoreTool, prompt string) actool.CoreTool {
+	return &promptOverrideTool{CoreTool: t, prompt: prompt}
+}
+
+func (p *promptOverrideTool) Prompt() string { return p.prompt }
+
+// applyHostPromptOverrides swaps the Bash extended prompt when the host cannot
+// honor the SDK's Unix advice (see BashPromptOverride). It runs after the DB
+// tool resolution and after the panic guard, so it sees the final tool objects
+// every agent entry point hands to the core.
+func applyHostPromptOverrides(tools []actool.CoreTool) []actool.CoreTool {
+	prompt, ok := BashPromptOverride()
+	if !ok {
+		return tools
+	}
+	for i, t := range tools {
+		if t.Name() == "Bash" {
+			tools[i] = OverrideToolPrompt(t, prompt)
+			break
+		}
+	}
+	return tools
+}
