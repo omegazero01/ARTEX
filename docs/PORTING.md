@@ -21,9 +21,8 @@
 | 7 | `port/07-intent-cancel` | `caa4a13` → `e5286c0` | `14a567b`（**已补齐**） | 新增 `cancel_intent` 工具（默认只绑 mainagent）；`Engine.StopIntent`：运行中 worker 用 `AbortCancelledByUser` 取消并轮询等待退出注册表（15s 上限），等待/暂停/阻塞意图直接置 `stopped`，产出保留，写 mainagent 活动记录 | build + vet 干净；`go test ./agent/ ./db/` 全绿；未搬 SERIES 的 355 行 server 级测试 |
 | 8 | `port/08-finding-suppression` | `a01fd25` | `78ab23f`（**部分**） | 新增 `finding_suppressions` 表（任务级：标题/类型/摘要/资产/原因/撤销时间）；删除漏洞时快照并写规则；`RecordFindingTx` 插入前拦截，命中返回 `ErrFindingSuppressed` 与解除指引；新增 `GET /api/finding-suppressions` 与 `DELETE /api/finding-suppressions/{id}` | 新 exe 启动后 5437 库中 `finding_suppressions` 表存在、`health=200`；3 条匹配单测（同标题命中/类型不同不命中/撤销不命中/共享资产命中/无交集不命中）通过 |
 | 9 | `port/09-bash-prompt` | `baf9ef2` | `f5a1b6e` + `092a081`（**用户已确认保留改写版**） | Windows 下把 Bash 工具的扩展说明换成改写版：删掉 `&&` 串联和 heredoc 两条 PowerShell 5.1 会报错的写法，保留“复杂任务先写脚本再执行、避免需要交互输入的命令”；`AugmentTools` 末尾统一套用，覆盖 worker/planner/mainagent/chat/reporter 全部入口 | 3 条测试通过（按系统判断、渲染后的 schema 不含 Unix 写法且基础描述/替换建议都在、只动 Bash 不动其它工具） |
-| 10 | `port/10-skill-path` | `7b9d5f5` | `b4e19b7` | 技能子目录路径统一 `/`：`skillRelPath` 改用 `path.Clean`/`path.IsAbs`，`walkSkillFiles` 返回前做 `filepath.ToSlash` | 修复前 `go test ./server -run TestSkillRelPath` 在本机 FAIL（子目录用例返回 `scripts
+| 10 | `port/10-skill-path` | `7b9d5f5` | `b4e19b7` | 技能子目录路径统一 `/`：`skillRelPath` 改用 `path.Clean`/`path.IsAbs`，`walkSkillFiles` 返回前做 `filepath.ToSlash` | 修复前 `go test ./server -run TestSkillRelPath` 在本机 FAIL（子目录用例返回 `scripts\un.py` 这类反斜杠）；修复后 PASS；新增列表回归测试 `TestWalkSkillFilesSlashPaths` |
 | 11 | `port/11-ui-refresh` | `1dd98d5` | `2d8e8a5` + `b79fb75` | 前端四处手动刷新按钮：流量页（等流量+host 两个请求都结束再恢复）、工具执行、LLM 录制、系统日志（拉 /api/logs 快照按 seq 合并，上限 5000 行） | `tsc --noEmit` 通过；`NEXT_EXPORT=1 next build` 通过；dist 内 chunk 含「刷新流量记录」；exe 52,151,296 字节；起服 health=200 且线上 chunk 命中该按钮，验证后已停服 |
-un.py` 这类反斜杠）；修复后 PASS；新增列表回归测试 `TestWalkSkillFilesSlashPaths` |
 
 ## 二、明确跳过（用户拍板，暂不做）
 
