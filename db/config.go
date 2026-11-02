@@ -817,6 +817,12 @@ type MCPServer struct {
 	Enabled   bool            `json:"enabled"`
 	Insecure  bool            `json:"insecure"` // http: skip TLS cert verification (self-signed servers, issue #108)
 	Tools     []string        `json:"tools,omitempty"` // cached tool names (mcp_tools_cache)
+	// Usage ledger (db/mcp_usage.go). Zero/empty until an agent actually calls one
+	// of this server's tools.
+	Calls       int        `json:"calls"`
+	Tasks       int        `json:"tasks"`
+	UsageAgents []string   `json:"usage_agents,omitempty"`
+	LastUsed    *time.Time `json:"last_used,omitempty"`
 }
 
 func (d *DB) ListMCP() ([]*MCPServer, error) {
@@ -843,6 +849,14 @@ func (d *DB) ListMCP() ([]*MCPServer, error) {
 	// Attach each server's cached tool names (best-effort; empty until discovered).
 	for _, m := range out {
 		m.Tools, _ = d.MCPToolNames(m.ID)
+	}
+	// Attach the usage ledger aggregate (best-effort; absent while never called).
+	if stats, err := d.MCPServerUsageStats(); err == nil {
+		for _, m := range out {
+			if st, ok := stats[m.ID]; ok {
+				m.Calls, m.Tasks, m.UsageAgents, m.LastUsed = st.Calls, st.Tasks, st.Agents, st.LastUsed
+			}
+		}
 	}
 	return out, nil
 }

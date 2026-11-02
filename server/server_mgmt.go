@@ -955,6 +955,37 @@ func (s *Server) pgMCPTools(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"tools": tools})
 }
 
+// pgMCPUsage returns one MCP server's per-tool aggregate plus its newest calls.
+func (s *Server) pgMCPUsage(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeErr(w, 400, "bad MCP id")
+		return
+	}
+	stats, err := pg.MCPToolUsageStats(id)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if stats == nil {
+		stats = []db.MCPUsageStat{}
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	calls, err := pg.RecentMCPCalls(id, limit)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if calls == nil {
+		calls = []db.MCPCall{}
+	}
+	writeJSON(w, 200, map[string]any{"stats": stats, "calls": calls})
+}
+
 // ---------- skills (文件系统) ----------
 
 type skillFileNode struct {

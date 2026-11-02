@@ -74,6 +74,9 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 			mcpIDs, _ := pg.AgentVisible(a.ID, "mcp")
 			want := idSet(mcpIDs)
 			all, _ := pg.ListMCP()
+			// RunInfo is attached by the caller before AugmentTools; read it once so
+			// every metered call of this run is attributed to the same task/intent.
+			ri := agent.RunInfoFrom(ctx)
 			for _, m := range all {
 				if !m.Enabled {
 					continue
@@ -95,7 +98,7 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 					continue
 				}
 				for _, t := range ts {
-					extra = append(extra, t)
+					extra = append(extra, meterMCPTool(t, pg, m.ID, m.Name, agentKey, ri))
 					allNames = append(allNames, t.Name())
 					serverTools[m.Name] = append(serverTools[m.Name], t.Name())
 					if directVisible && !skillGated {

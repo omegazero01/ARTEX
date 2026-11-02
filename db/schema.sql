@@ -1385,3 +1385,23 @@ CREATE INDEX IF NOT EXISTS idx_notification_deliveries_batch
     ON notification_deliveries(batch_id) WHERE batch_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_notification_deliveries_channel
     ON notification_deliveries(channel_id, id DESC);
+
+-- =====================================================================
+-- MCP 工具调用台账：只记归因（服务器/工具/agent/任务），不记参数与返回。
+-- server_name 存快照，服务器改名或删除后历史仍可读。
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS mcp_usage (
+    id             BIGSERIAL PRIMARY KEY,
+    ts             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    server_id      BIGINT,
+    server_name    TEXT NOT NULL,
+    tool_name      TEXT NOT NULL,
+    agent_key      TEXT,
+    task_id        BIGINT,
+    exploration_id BIGINT,
+    intent_id      BIGINT,
+    session_id     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_usage_server ON mcp_usage(server_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_usage_tool ON mcp_usage(server_id, tool_name, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_usage_task ON mcp_usage(task_id);
