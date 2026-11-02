@@ -19,10 +19,11 @@ func TestMCPToolsDetailedCarriesCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("save mcp: %v", err)
 	}
-	t.Cleanup(func() {
+	// defer (not t.Cleanup): t.Cleanup runs after defer d.Close(), leaving rows behind.
+	defer func() {
 		_, _ = d.Exec(`DELETE FROM mcp_usage WHERE server_id=$1`, id)
 		_ = d.DeleteMCP(id)
-	})
+	}()
 
 	// Cache rows carry the model-facing prefix while the ledger stores the bare name.
 	if err := d.SaveMCPTools(id, []MCPTool{
