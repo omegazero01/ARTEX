@@ -200,7 +200,7 @@ export function sseUrl(path: string): string {
   return token ? `${base}${path}${sep}token=${encodeURIComponent(token)}` : `${base}${path}`;
 }
 
-const get = <T>(p: string) => http<T>(p);
+const get = <T>(p: string, init?: RequestInit) => http<T>(p, init);
 const post = <T>(p: string, body?: unknown) =>
   http<T>(p, { method: "POST", body: body ? JSON.stringify(body) : undefined });
 const put = <T>(p: string, body?: unknown) =>
@@ -1316,8 +1316,11 @@ export const api = {
   // 留给用户显式点「检查更新」时用。
   // 未读角标：queries 里每个任务带自己的快照游标（空串=首次访问，返回基线）。
   // 只读接口，不写库；服务端一次 SQL 批量返回整页计数。
-  taskNotifications: (queries: { task_id: string; findings: string }[]) =>
-    get<TaskNotificationSummary>(`/tasks/notifications?queries=${encodeURIComponent(JSON.stringify(queries))}`),
+  taskNotifications: (queries: { task_id: string; findings: string }[], signal?: AbortSignal) =>
+    get<TaskNotificationSummary>(
+      `/tasks/notifications?queries=${encodeURIComponent(JSON.stringify(queries))}`,
+      signal ? { signal } : undefined,
+    ),
 
   checkUpdate: (force = false) => get<UpdateCheck>(`/update/check${force ? "?force=1" : ""}`),
   // 202 即返回，实际下载在后台跑，进度走 /api/update/stream。

@@ -46,7 +46,7 @@ import { toast } from "sonner";
 
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
 import { StatusBadge } from "@/components/status-badge";
-import { useTaskUnread } from "@/hooks/use-task-unread";
+import { TaskUnreadBadge, useTaskNotifications } from "@/components/task-notifications";
 import { TablePagination } from "@/components/table-pagination";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { TaskTemplateControls } from "@/components/task-template-controls";
@@ -424,8 +424,8 @@ export default function TasksPage() {
   }, []);
 
   const pageIds = React.useMemo(() => paginated.map((t) => t.id), [paginated]);
-  // 未读漏洞角标：只统计当前页任务，轮询走 30s + 页面可见时；不写库。
-  const { counts: unreadCounts, markRead } = useTaskUnread(pageIds);
+  // 未读漏洞角标：与 SERIES 一致，不做定时器，复用列表刷新/页面可见/游标变更事件。
+  const { counts: unread, capture } = useTaskNotifications(pageIds);
   const pageSelectedCount = React.useMemo(
     () => pageIds.filter((id) => selectedIds.has(id)).length,
     [pageIds, selectedIds],
@@ -994,8 +994,8 @@ export default function TasksPage() {
                       onArchive={queueTaskArchive}
                       selected={selectedIds.has(task.id)}
                       onSelectedChange={toggleSelected}
-                      unread={unreadCounts[task.id] ?? 0}
-                      onOpen={markRead}
+                      unread={unread[task.id]?.findings ?? 0}
+                      onOpen={(id) => capture(id, "findings")()}
                     />
                   ))}
                 </TableBody>
@@ -1201,16 +1201,7 @@ const TaskRow = React.memo(function TaskRow({
       <TableCell className="font-medium">
         <div className="flex max-w-xs items-center gap-2">
           <TaskNameEditor task={task} onRename={onRename} />
-          {unread > 0 && (
-            <Badge
-              variant="notification"
-              className="ml-1 min-w-5 shrink-0"
-              aria-label={`新漏洞，${unread} 条未读`}
-              title={`${unread} 条新漏洞（打开任务后清零）`}
-            >
-              {unread > 99 ? "99+" : unread}
-            </Badge>
-          )}
+          <TaskUnreadBadge count={unread} label="查看新漏洞" />
           {task.active && <StarIcon className="size-4 shrink-0 fill-amber-400 text-amber-400" />}
           {taskIsPinned(task) && <PinIcon className="text-primary size-4 shrink-0" aria-label="已置顶" />}
         </div>
