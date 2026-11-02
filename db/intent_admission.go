@@ -17,7 +17,8 @@ func (s *ExplorationStore) DiscardOpenIntent(id int64) error {
 		return err
 	}
 	res, err := tx.Exec(`DELETE FROM exploration_nodes
-		WHERE id=$1 AND exploration_id=$2 AND kind='intent' AND state='open'`, id, s.expID)
+		WHERE id=$1 AND exploration_id=$2 AND kind='intent' AND state='open'
+  AND payload->>'cancelled_by_user' IS DISTINCT FROM 'true'`, id, s.expID)
 	if err != nil {
 		return err
 	}

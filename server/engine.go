@@ -650,66 +650,64 @@ const workStopWait = 15 * time.Second
 // tool). A running work is cancelled and awaited; queued/paused/blocked intents are
 // marked stopped directly. Outputs and lineage are kept either way, and a stopped
 // intent is no longer claimed automatically.
-func (e *Engine) StopIntent(ctx context.Context, taskID, intentID int64, reason string) (string, error) {
+func (e *Engine) StopIntent(ctx context.Context, taskID, intentID int64, reason string) (agent.IntentStopResult, error) {
 	ri := agent.RunInfoFrom(ctx)
 	if taskID <= 0 || ri.TaskID != taskID || ri.IntentID != 0 || e.m == nil {
-		return "", fmt.Errorf("仅主代理可在当前任务内取消意图（任务上下文不匹配）")
+		return agent.IntentStopResult{}, fmt.Errorf("仅主代理可在当前任务内取消意图（任务上下文不匹配）")
 	}
 	t, ok := e.m.Task(strconv.FormatInt(taskID, 10))
 	if !ok {
-		return "", fmt.Errorf("task not found")
-	}
-	n, err := t.Store.GetNode(intentID)
-	if err != nil {
-		return "", err
-	}
-	if n == nil || n.Kind != db.KindIntent {
-		return "", fmt.Errorf("intent_id 必须是本任务的意图")
+		return agent.IntentStopResult{}, fmt.Errorf("task not found")
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "用户要求取消该意图"
 	}
-	switch n.State {
-	case "stopped", "cancelled", "deleted":
-		return n.State, nil
-	case "open", "paused", "blocked":
-		if err := t.Store.SetIntentState(intentID, "stopped"); err != nil {
-			return "", err
+	deadline := time.Now().Add(workStopWait)
+	for {
+		n, err := t.Store.GetNode(intentID)
+		if err != nil {
+			return agent.IntentStopResult{}, err
 		}
-	case "running":
-		e.workMu.Lock()
-		run := e.work[intentID]
-		e.workMu.Unlock()
-		if run != nil {
-			run.cancel(agent.AbortCancelledByUser)
+		if n == nil || n.Kind != db.KindIntent {
+			return agent.IntentStopResult{}, fmt.Errorf("intent_id 必须是本任务的意图")
 		}
-		deadline := time.Now().Add(workStopWait)
-		for time.Now().Before(deadline) {
-			e.workMu.Lock()
-			_, alive := e.work[intentID]
-			e.workMu.Unlock()
-			if !alive {
-				break
+		if n.UserCancelled() {
+			return agent.IntentStopResult{ID: intentID, State: "stopped", Reason: reason, CancelledByUser: true}, nil
+		}
+		switch n.State {
+		case "open", "paused":
+			if err := t.Store.StopIntentWithReason(intentID, reason); err != nil {
+				return agent.IntentStopResult{}, err
 			}
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-time.After(20 * time.Millisecond):
+			t.NotifyCancelled(intentID, intentSummaryOf(n), reason)
+			t.Notify()
+			iid := intentID
+			e.emitActivity(t, db.Activity{Worker: "mainagent", NodeID: &iid, Kind: "text",
+				Summary: fmt.Sprintf("用户取消意图 #%d", intentID),
+				Detail:  "中断原因：cancelled_by_user；取消原因：" + reason + "。意图与已有产出保留，不再自动领取。"})
+			e.touch(t.ID)
+			return agent.IntentStopResult{ID: intentID, State: "stopped", Reason: reason, CancelledByUser: true}, nil
+		case "running":
+			// 运行中的 worker 先走统一的取消控制（并发锁 + 等它真正停下），
+			// worker 会把状态落到 paused，下一轮循环再写停止锁。
+			if err := e.ControlWork(ctx, intentID, "cancel"); err != nil && !errors.Is(err, errWorkControlConflict) {
+				return agent.IntentStopResult{}, err
 			}
+		case "stopped", "cancelled", "deleted":
+			return agent.IntentStopResult{ID: intentID, State: n.State, Reason: n.State, CancelledByUser: n.UserCancelled()}, nil
+		default:
+			return agent.IntentStopResult{}, fmt.Errorf("当前状态 %s 不能取消", n.State)
 		}
-		if err := t.Store.SetIntentState(intentID, "stopped"); err != nil {
-			return "", err
+		if time.Now().After(deadline) {
+			return agent.IntentStopResult{ID: intentID}, context.DeadlineExceeded
 		}
-	default:
-		return "", fmt.Errorf("当前状态 %s 不能取消", n.State)
+		select {
+		case <-ctx.Done():
+			return agent.IntentStopResult{ID: intentID}, ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
-	iid := intentID
-	e.emitActivity(t, db.Activity{Worker: "mainagent", NodeID: &iid, Kind: "text",
-		Summary: fmt.Sprintf("用户取消意图 #%d", intentID),
-		Detail:  "中断原因：cancelled_by_user；取消原因：" + reason + "。意图与已有产出保留，不再自动领取。"})
-	e.touch(t.ID)
-	return "stopped", nil
 }
 
 // Broadcaster exposes the engine's live activity pub/sub (used by the SSE handler).

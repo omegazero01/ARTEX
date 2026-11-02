@@ -480,11 +480,11 @@ func (s *Server) toolCancelIntent() actool.CoreTool {
 			if iid <= 0 {
 				return actool.Errorf("intent_id 无效"), nil
 			}
-			state, err := s.engine.StopIntent(ctx, a.TaskID, iid, a.Reason)
+			res, err := s.cancelIntentFromMain(ctx, a.TaskID, iid, a.Reason)
 			if err != nil {
 				return actool.Errorf(err.Error()), nil
 			}
-			return jsonResult(map[string]any{"intent_id": iid, "state": state, "cancelled": true})
+			return jsonResult(res)
 		})
 }
 

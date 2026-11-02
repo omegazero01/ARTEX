@@ -311,7 +311,8 @@ func (s *ExplorationStore) DeleteGoal(id int64) error {
 // forever in the UI. Workers resume from their transcript, so reopening is safe.
 func (s *ExplorationStore) ResetRunningIntents() (int64, error) {
 	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='open', completed_at=NULL, blocked_reason=NULL
-WHERE exploration_id=$1 AND kind='intent' AND state='running'`, s.expID)
+WHERE exploration_id=$1 AND kind='intent' AND state='running'
+  AND payload->>'cancelled_by_user' IS DISTINCT FROM 'true'`, s.expID)
 	if err != nil {
 		return 0, err
 	}
@@ -325,7 +326,10 @@ WHERE exploration_id=$1 AND kind='intent' AND state='running'`, s.expID)
 // done/open/running are left untouched. Returns whether a row changed. Used by "重跑".
 func (s *ExplorationStore) ReopenIntent(id int64) (bool, error) {
 	res, err := s.db.Exec(`UPDATE exploration_nodes
-SET state='open', completed_at=NULL, blocked_reason=NULL
+SET state='open', completed_at=NULL, blocked_reason=NULL,
+    payload = CASE WHEN payload->>'cancelled_by_user'='true'
+      THEN payload || jsonb_build_object('cancelled_by_user', false, 'reopened_by_user_at', now())
+      ELSE payload END
 WHERE id=$1 AND exploration_id=$2 AND kind='intent'
   AND state IN ('blocked','exhausted','stopped')`, id, s.expID)
 	if err != nil {
@@ -340,7 +344,8 @@ WHERE id=$1 AND exploration_id=$2 AND kind='intent'
 // number reopened. Workers resume from their transcripts; kept graph writes remain.
 func (s *ExplorationStore) ReopenBlockedIntents() (int64, error) {
 	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='open', completed_at=NULL, blocked_reason=NULL
-WHERE exploration_id=$1 AND kind='intent' AND state='blocked'`, s.expID)
+WHERE exploration_id=$1 AND kind='intent' AND state='blocked'
+  AND payload->>'cancelled_by_user' IS DISTINCT FROM 'true'`, s.expID)
 	if err != nil {
 		return 0, err
 	}
@@ -1139,6 +1144,7 @@ func (s *ExplorationStore) Frontier(limit int) ([]*Node, error) {
 	}
 	rows, err := s.db.Query(`SELECT `+nodeCols+` FROM exploration_nodes
 WHERE exploration_id=$1 AND kind='intent' AND state='open'
+  AND payload->>'cancelled_by_user' IS DISTINCT FROM 'true'
 ORDER BY priority DESC, id ASC LIMIT $2`, s.expID, limit)
 	if err != nil {
 		return nil, err
@@ -1172,7 +1178,8 @@ WHERE exploration_id=$1 AND kind='goal' AND state='open')`, s.expID).Scan(&exist
 // ClaimIntent atomically moves an open intent to running. Returns true if claimed.
 func (s *ExplorationStore) ClaimIntent(id int64, owner string) (bool, error) {
 	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='running', owner=$1
-WHERE id=$2 AND exploration_id=$3 AND kind='intent' AND state='open'`, owner, id, s.expID)
+WHERE id=$2 AND exploration_id=$3 AND kind='intent' AND state='open'
+  AND payload->>'cancelled_by_user' IS DISTINCT FROM 'true'`, owner, id, s.expID)
 	if err != nil {
 		return false, err
 	}
