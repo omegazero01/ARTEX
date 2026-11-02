@@ -509,6 +509,7 @@ export default function ToolsPage() {
       <CustomToolDialog
         edit={customEdit}
         agents={agents}
+        tools={customTools}
         onClose={() => setCustomEdit(null)}
         onSaved={() => {
           setCustomEdit(null);
@@ -536,11 +537,13 @@ type ExecState = {
 function CustomToolDialog({
   edit,
   agents,
+  tools,
   onClose,
   onSaved,
 }: {
   edit: Tool | "new" | null;
   agents: Agent[];
+  tools: Tool[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -601,6 +604,23 @@ function CustomToolDialog({
     setDeferred(!!t.deferred);
     setEnabled(t.enabled);
   }, [edit]);
+
+  // Ported from SERIES tools-settings.tsx: two enabled shell declarations that
+  // resolve to the same command name are both skipped by the ledger (ambiguity),
+  // so warn before saving.
+  const commandName = executable.trim() || key;
+  const conflicts = tools.filter(
+    (other) =>
+      other.key !== key &&
+      other.kind === "shell" &&
+      other.enabled &&
+      enabled &&
+      (other.agents ?? []).some((agent) => bound.includes(agent)) &&
+      ((other.executable?.trim() || other.key) === commandName ||
+        (!(other.executable?.trim() || other.key).includes("/") &&
+          (other.executable?.trim() || other.key) === commandName.split("/").pop()) ||
+        (!commandName.includes("/") && (other.executable?.trim() || other.key).split("/").pop() === commandName)),
+  );
 
   const toggleAgent = (k: string) => setBound((b) => (b.includes(k) ? b.filter((x) => x !== k) : [...b, k]));
 
@@ -740,6 +760,12 @@ function CustomToolDialog({
                   填写实际执行文件名（如 gogo_linux_amd64）或绝对路径，不含参数；留空仅按 Key 匹配。若实际文件名与 Key
                   不同，必须填写此项才能统计 Bash 调用。
                 </p>
+                {conflicts.length > 0 && (
+                  <p role="alert" className="text-destructive text-xs">
+                    与 {conflicts.map((other) => other.key).join("、")}{" "}
+                    的命令名可能重复；绝对路径按配置目录匹配，仍有多个配置命中时不计数。
+                  </p>
+                )}
               </div>
               <div className="grid gap-1.5">
                 <Label className="text-xs">工具所在目录</Label>
