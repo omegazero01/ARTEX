@@ -300,7 +300,7 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 		// attached (on Windows it explains that commands actually run through
 		// PowerShell); user-defined kind="shell" declarations are appended when
 		// present.
-		note := agent.HostEnvironmentNote()
+		note := agent.HostEnvironmentNote() + agent.HostLessonNote()
 		if len(shellHints) > 0 {
 			note += "\n\n以下工具已安装在此 bash 环境中，可直接通过 Bash 调用：\n" + strings.Join(shellHints, "\n")
 		}

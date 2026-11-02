@@ -587,6 +587,12 @@ func (h steerHooks) PreToolUse(ctx context.Context, name string, input []byte) (
 }
 
 func (h steerHooks) PostToolUse(ctx context.Context, name string, input, result []byte, isErr bool) {
+	if isErr {
+		// Host-level error distillation runs before the inner hook so the lesson
+		// is recorded even if the inner hook returns early. The recorder is a
+		// no-op when ConfigureHostLessons has not been called.
+		agent.RecordHostLesson(name, input, result)
+	}
 	if h.inner != nil {
 		h.inner.PostToolUse(ctx, name, input, result, isErr)
 	}

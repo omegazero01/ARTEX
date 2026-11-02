@@ -354,6 +354,10 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	// Host lessons: failed Bash calls are distilled into <data>/host/lessons.json
+	// and surfaced in the Bash description on the next run. An empty path would
+	// disable both, so this must run before any task starts.
+	agent.ConfigureHostLessons(filepath.Join(dir, "host", "lessons.json"))
 	dsn, source, err := pgdb.DSN()
 	if err != nil {
 		return nil, err
