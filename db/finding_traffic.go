@@ -326,6 +326,8 @@ func (d *DB) EditFindingTraffic(ctx context.Context, findingID, bindingID, versi
 }
 
 type RecordFindingInput struct {
+	Reproduction *FindingReproduction
+
 	TaskID, ExplorationID, IntentID                      int64
 	VulnClass, Name, Severity, Summary, Evidence, Worker string
 	AssetIDs                                             []int64
@@ -340,6 +342,9 @@ type RecordedFinding struct {
 // ctx 由调用方传入本次事务所用的上下文（而非在内部取 context.Background）：
 // 事务内新加的推送事件写入同样应受调用方的取消与超时约束。
 func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, prepared []PreparedTrafficEvidence) (*RecordedFinding, error) {
+	if err := in.Reproduction.ValidateInput(); err != nil {
+		return nil, err
+	}
 	if err := LockTaskEvidenceTx(tx, in.TaskID); err != nil {
 		return nil, err
 	}
@@ -404,7 +409,22 @@ VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9,pg_current_xact_id()) RETURNING id`,
 	}
 	var err error
 	out.Traffic, err = FindingTrafficTx(tx, out.FindingID)
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	if in.Reproduction != nil {
+		raw, err := in.Reproduction.Resolve(out.Traffic.Bindings)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec(`UPDATE findings SET reproduction=$2::jsonb WHERE id=$1`, out.FindingID, string(raw)); err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec(`UPDATE exploration_nodes SET payload=jsonb_set(payload,'{reproduction}',$2::jsonb) WHERE id=$1`, out.NodeID, string(raw)); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // RecordFinding is the atomic legacy/no-recorder path used by tools and tests.

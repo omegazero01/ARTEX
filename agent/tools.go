@@ -1220,7 +1220,21 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 	return writeTool("report_finding", "记录确认的漏洞，用 evidence 提供命令输出、日志等可验证证据。任务上下文传当前 intent_id。返回的 finding_id 是独立漏洞记录 ID，finding_node_id 是探索节点 ID（第一行保留该节点编号）。", obj(map[string]any{
 		"vulnclass": str("漏洞类别"), "name": str("漏洞名称"), "severity": str("critical|high|medium|low"), "summary": str("发现摘要"),
 		"intent_id": idp("当前任务的意图 id"), "asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "受影响资产 id"},
-		"evidence":         str("证据/PoC 文本"),
+		"evidence": str("证据/PoC 文本"),
+		"reproduction": map[string]any{"type": "object", "description": "可选；结构化现场复现。entry_point/prerequisites/steps；每步 title/action/result 必填，记录实际返回；HTTP 用 request/response 原文，非 HTTP 用 command/output。binding_ids 由服务端生成，不要传。无包或未采集时省略或说明原因。", "properties": map[string]any{
+			"entry_point":   str("从哪里进入（URL/接口/入口点）"),
+			"prerequisites": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "前置条件（账号、配置、网络位置），最多 50 条"},
+			"steps": map[string]any{"type": "array", "description": "复现步骤，1..50 步，按真实施工顺序", "items": obj(map[string]any{
+				"title":    str("这一步做什么（短标题）"),
+				"action":   str("具体操作"),
+				"result":   str("实际返回结果；未记录时明确写未记录，不把预期当实测"),
+				"proves":   str("这一步证明什么"),
+				"request":  str("HTTP 请求原文（含真实 headers）"),
+				"response": str("HTTP 响应原文"),
+				"command":  str("非 HTTP 的命令"),
+				"output":   str("命令实际输出"),
+			}, "title", "action", "result")},
+		}},
 		"evidence_hint_id": idp("可选：本任务中对应此漏洞的提示节点 ID，自动携带其结构化 traffic_refs；不能引用继承提示或其他漏洞的提示"),
 		"traffic_refs": map[string]any{"type": "array", "description": "可选；HTTP/HTTPS 漏洞先检索并逐条核实请求/响应确实支持漏洞结论，再按复现顺序填写真实 ID。TCP 等非 HTTP 漏洞、未采集或找不到确切记录时省略或传 []，不阻止上报；可在 evidence 说明原因并提供其他可验证证据。不要猜测 ID、按域名/时间推定关联或仅为补包重复探测。用途 baseline 正常对照 / proof 漏洞证明 / verification 补充验证 / supporting 辅助证据。",
 			"items": obj(map[string]any{"traffic_id": str("traffic_search 返回的真实流量 ID"), "role": map[string]any{"type": "string", "enum": []string{"baseline", "proof", "verification", "supporting"}}, "note": str("该流量如何支持漏洞结论")}, "traffic_id")},
@@ -1231,6 +1245,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			AssetIDs                                     []json.RawMessage `json:"asset_ids"`
 			TrafficRefs                                  []db.TrafficRef   `json:"traffic_refs"`
 			EvidenceHintID                               json.RawMessage   `json:"evidence_hint_id"`
+			Reproduction                                 json.RawMessage   `json:"reproduction"`
 		}
 		if err := json.Unmarshal(in, &a); err != nil {
 			return actool.Errorf(err.Error()), nil
@@ -1253,7 +1268,11 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		input := db.RecordFindingInput{TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, AssetIDs: pidList(a.AssetIDs)}
+		reproduction, err := db.DecodeFindingReproduction(a.Reproduction)
+		if err != nil {
+			return actool.Errorf(err.Error()), nil
+		}
+		input := db.RecordFindingInput{Reproduction: reproduction, TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, AssetIDs: pidList(a.AssetIDs)}
 		var recorded *db.RecordedFinding
 		if t.findingRecorder != nil {
 			recorded, err = t.findingRecorder.Record(ctx, input, refs)

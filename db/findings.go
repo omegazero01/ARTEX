@@ -35,7 +35,9 @@ type DBFinding struct {
 	// ReportDetail 保存完整技术明细(含 <!-- SERIES:TECHNICAL --> 注释块),供内部
 	// 检索与复盘;导出与 UI 只用 Report(人类提交版)。
 	ReportDetail    string
-	CreatedAt       time.Time
+	// Reproduction 是发现时记录的不可变复现步骤（JSONB）；NULL 表示老漏洞没有该记录。
+	Reproduction json.RawMessage
+	CreatedAt    time.Time
 	TaskDescription string // populated via LEFT JOIN on tasks
 }
 
@@ -636,13 +638,13 @@ func (d *DB) FindingStats() (*FindingStats, error) {
 func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 	f := &DBFinding{}
 	var aidsJSON string
-	err := d.QueryRow(`SELECT `+findingSelectCols+`, COALESCE(f.report, ''), COALESCE(f.report_detail, '')
+	err := d.QueryRow(`SELECT `+findingSelectCols+`, COALESCE(f.report, ''), COALESCE(f.report_detail, ''), COALESCE(f.reproduction, 'null'::jsonb)
 		FROM findings f
 		LEFT JOIN tasks t ON f.task_id = t.id
 		WHERE f.id = $1`, id).Scan(
 		&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 		&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
-		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report, &f.ReportDetail)
+		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report, &f.ReportDetail, &f.Reproduction)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

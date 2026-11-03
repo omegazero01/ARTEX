@@ -488,6 +488,24 @@ export interface FindingAsset {
   label: string;
 }
 
+export interface FindingReproductionStep {
+  title: string;
+  action: string;
+  result: string;
+  proves?: string;
+  request?: string;
+  response?: string;
+  command?: string;
+  output?: string;
+  binding_ids?: string[]; // 服务端生成的流量绑定 id
+}
+
+export interface FindingReproduction {
+  entry_point?: string;
+  prerequisites?: string[];
+  steps: FindingReproductionStep[];
+}
+
 export interface Finding {
   traffic_count?: number;
   evidence_version?: number;
@@ -503,6 +521,7 @@ export interface Finding {
   evidence: string;
   report?: string; // 人类提交版(Markdown);仅详情接口返回,列表为空
   report_detail?: string; // 完整技术明细(Markdown);内部检索用,不导出
+  reproduction?: FindingReproduction | null; // 结构化现场复现；老漏洞为空
   intent_id?: string;
   param_id?: string;
   task_id?: string;

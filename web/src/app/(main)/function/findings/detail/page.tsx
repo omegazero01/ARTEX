@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { CopyButton } from "@/components/copy-button";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
+import { FindingReproductionPanel } from "@/components/finding-reproduction-panel";
 import { Markdown } from "@/components/markdown";
 import { StatusBadge } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -194,6 +195,20 @@ function FindingDetailInner() {
                 readOnly={finding.inherited}
                 onChanged={load}
               />
+              {finding.reproduction?.steps?.length ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-sm">分步复现</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <FindingReproductionPanel
+                      reproduction={finding.reproduction}
+                      findingId={finding.finding_id || id}
+                      contextTask={contextTaskId || undefined}
+                    />
+                  </CardContent>
+                </Card>
+              ) : null}
               {/* 证据下方：提交报告(Markdown 渲染) */}
               <Card>
                 <CardHeader className="flex-row items-center justify-between">

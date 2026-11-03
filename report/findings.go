@@ -91,6 +91,17 @@ func FindingsMarkdown(fs []*db.DBFinding, generatedAt time.Time) string {
 }
 
 // SingleFindingMarkdown 渲染单条漏洞为一份独立 Markdown(用于「一漏洞一文件」打包)。
+// findingReportBody 优先用人类提交版；没有提交版时用结构化复现记录（分步）。
+func findingReportBody(f *db.DBFinding) string {
+	if f == nil {
+		return ""
+	}
+	if rep := strings.TrimSpace(f.Report); rep != "" {
+		return rep
+	}
+	return ReproductionMarkdown(f.Reproduction)
+}
+
 func SingleFindingMarkdown(f *db.DBFinding, generatedAt time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# [%s] %s\n\n", strings.ToUpper(nz(f.Severity, "info")), findingTitle(f))
@@ -110,7 +121,7 @@ func SingleFindingMarkdown(f *db.DBFinding, generatedAt time.Time) string {
 	if e := strings.TrimSpace(f.Evidence); e != "" {
 		fmt.Fprintf(&b, "## 证据\n\n```\n%s\n```\n\n", e)
 	}
-	if rep := strings.TrimSpace(f.Report); rep != "" {
+	if rep := findingReportBody(f); rep != "" {
 		b.WriteString("## 详细报告\n\n")
 		b.WriteString(rep)
 		b.WriteString("\n")
