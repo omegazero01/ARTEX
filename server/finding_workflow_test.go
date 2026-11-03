@@ -198,7 +198,7 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 func TestFindingWorkflowMigrationPreservesUserConfiguration(t *testing.T) {
 	s, _, _ := trafficEvidenceServer(t)
 	pg := s.m.pg
-	for _, key := range []string{"report_finding", "add_hint", "add_task_hint", "traffic_search", "traffic_get", "traffic_blob", "bind_finding_traffic", "get_finding_traffic"} {
+	for _, key := range []string{"report_finding", "add_hint", "add_task_hint", "traffic_search", "traffic_get", "bind_finding_traffic", "get_finding_traffic"} {
 		old, err := pg.GetTool(key)
 		if err != nil || old == nil {
 			t.Fatal("missing tool", key, err)
@@ -246,8 +246,8 @@ func TestFindingWorkflowMigrationPreservesUserConfiguration(t *testing.T) {
 	}
 	search, _ := pg.GetTool("traffic_search")
 	get, _ := pg.GetTool("traffic_get")
-	if !strings.Contains(search.Description, "支持裸主机、主机:端口或完整 URL") {
-		t.Fatal("traffic_search description migration missing host/port guidance")
+	if !strings.Contains(search.Description, "支持URL、正文、方法、状态码和时间过滤") {
+		t.Fatal("traffic_search description missing SERIES filter guidance")
 	}
 	if search.Enabled || !contains(search.Agents, "reporter") || get.Enabled || len(get.Agents) != 1 || get.Agents[0] != "custom-agent" {
 		t.Fatal("default/custom reader binding migration incorrect")
@@ -319,7 +319,7 @@ func TestFindingWorkflowReporterBindsBeforeWritingReport(t *testing.T) {
 		t.Fatal("off reporter still receives auto-binding guidance")
 	}
 	for _, tool := range off {
-		if tool.Name() == "traffic_search" || tool.Name() == "traffic_get" || tool.Name() == "traffic_blob" || tool.Name() == "bind_finding_traffic" {
+		if tool.Name() == "traffic_search" || tool.Name() == "traffic_get" || tool.Name() == "bind_finding_traffic" {
 			t.Fatal("auto-binding tool exposed while off", tool.Name())
 		}
 	}
