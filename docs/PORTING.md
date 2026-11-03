@@ -19,7 +19,7 @@
 | 统一提交报告模板 | `port/05-report` | `f956f46` → `d29b10c` / 前端 `cf1681a` + 任务页导出 | `67dc00c` + `8b6ef32`（**已补齐**） | 统一提交报告模板（漏洞名称/等级/类型/URL + 详细描述/复现步骤/修复方案）；字数预算（350/200/400 字）；技术附录用 `<!-- SERIES:TECHNICAL -->` 切分，不导出；新增 `findings.report_detail` | 报告格式测试（含 11 条预算子用例）全过；新 exe 启动后 `findings` 表出现 `report_detail`（启动时自动迁移）；`GetFinding` 读回新列正常；任务发现页批量导出（勾选/全选 → `md-report-zip`）已补，`npx tsc --noEmit` 与 `NEXT_EXPORT=1 next build` 通过，产物 chunk 命中「导出提交报告」 |
 | 收尾闸门改用 hook | `port/06-settlement-hook` | `2a971ee` | `77d45b0` | 收尾相位不再把 Bash 从工具清单删掉（会改写请求前缀、缓存全失效）；改为 gate 观察每次请求，命中收尾提示词后由 `steerHooks.PreToolUse` 拒绝执行，工具清单全程不变 | 6 条单测（置位/前缀/PromptByReason/惰性/包装透传/ctx）；`go build ./...`=0；`go test ./agent/ ./db/` 全绿 |
 | 主代理取消意图 | `port/07-intent-cancel` | `caa4a13` → `e5286c0` | `14a567b`（**已补齐**） | 新增 `cancel_intent` 工具（默认只绑 mainagent）；`Engine.StopIntent`：运行中 worker 用 `AbortCancelledByUser` 取消并轮询等待退出注册表（15s 上限），等待/暂停/阻塞意图直接置 `stopped`，产出保留，写 mainagent 活动记录 | build + vet 干净；`go test ./agent/ ./db/` 全绿；未搬 SERIES 的 355 行 server 级测试 |
-| 禁报规则 | `port/08-finding-suppression` | `a01fd25` | `78ab23f`（**部分**） | 新增 `finding_suppressions` 表（任务级：标题/类型/摘要/资产/原因/撤销时间）；删除漏洞时快照并写规则；`RecordFindingTx` 插入前拦截，命中返回 `ErrFindingSuppressed` 与解除指引；新增 `GET /api/finding-suppressions` 与 `DELETE /api/finding-suppressions/{id}` | 新 exe 启动后 5437 库中 `finding_suppressions` 表存在、`health=200`；3 条匹配单测（同标题命中/类型不同不命中/撤销不命中/共享资产命中/无交集不命中）通过 |
+| 禁报规则（**已回滚**） | `port/08-finding-suppression` | `a01fd25` → `e798b64` 撤销 | `78ab23f`（**部分**） | 新增 `finding_suppressions` 表（任务级：标题/类型/摘要/资产/原因/撤销时间）；删除漏洞时快照并写规则；`RecordFindingTx` 插入前拦截，命中返回 `ErrFindingSuppressed` 与解除指引；新增 `GET /api/finding-suppressions` 与 `DELETE /api/finding-suppressions/{id}` | 新 exe 启动后 5437 库中 `finding_suppressions` 表存在、`health=200`；3 条匹配单测（同标题命中/类型不同不命中/撤销不命中/共享资产命中/无交集不命中）通过 |
 | Windows Bash 提示改写 | `port/09-bash-prompt` | `baf9ef2` | `f5a1b6e` + `092a081`（**用户已确认保留改写版**） | Windows 下把 Bash 工具的扩展说明换成改写版：删掉 `&&` 串联和 heredoc 两条 PowerShell 5.1 会报错的写法，保留“复杂任务先写脚本再执行、避免需要交互输入的命令”；`AugmentTools` 末尾统一套用，覆盖 worker/planner/mainagent/chat/reporter 全部入口 | 3 条测试通过（按系统判断、渲染后的 schema 不含 Unix 写法且基础描述/替换建议都在、只动 Bash 不动其它工具） |
 | 技能路径统一斜杠 | `port/10-skill-path` | `7b9d5f5` | `b4e19b7` | 技能子目录路径统一 `/`：`skillRelPath` 改用 `path.Clean`/`path.IsAbs`，`walkSkillFiles` 返回前做 `filepath.ToSlash` | 修复前 `go test ./server -run TestSkillRelPath` 在本机 FAIL（子目录用例返回 `scripts\un.py` 这类反斜杠）；修复后 PASS；新增列表回归测试 `TestWalkSkillFilesSlashPaths` |
 | 界面手动刷新按钮 | `port/11-ui-refresh` | `1dd98d5` | `2d8e8a5` + `b79fb75` | 前端四处手动刷新按钮：流量页（等流量+host 两个请求都结束再恢复）、工具执行、LLM 录制、系统日志（拉 /api/logs 快照按 seq 合并，上限 5000 行） | `tsc --noEmit` 通过；`NEXT_EXPORT=1 next build` 通过；dist 内 chunk 含「刷新流量记录」；exe 52,151,296 字节；起服 health=200 且线上 chunk 命中该按钮，验证后已停服 |
@@ -45,6 +45,9 @@
 | 分栏折叠 | `452d6c7` | “其他先不迁移” | 要新造 `finding-presentation` 组件（ARTEX 没有），收益是界面舒适度，不影响探测 | 想要再做，先比对发现页现有渲染结构 |
 | 漏洞归并（finding cases） | `3bc602e`（后端）+ `9a52f5d`、`e19ea54`、`5426444`（前端） | “这个先跳过” | 造子系统：后端约 3000 行（含 637 行 db、558 行 server、3 张新表），前端约 1000 行；只影响报告整理（同一漏洞多条合成一案），不影响探测能力 | 先出差异清单（`report/findings.go`、`server/finding_traffic_export.go` 在 ARTEX 的对应物），再决定 |
 | 联盟系统（台账/画像/反哺） | `46903b4`、`3ceae46`、`977909c`、`4c89e3a` 等约 10 条 | “其他先不迁移” | 约 4900 行、33 文件，是城商行联盟定制业务，与通用探测无关 | 按客户定制需求单独立项 |
+| 资产审批体系（模板/分组审批/封禁墓碑/来源回溯/agent 侧读写授权/派生父级授权） | SERIES `db/asset_templates.go`、`asset_approval_groups.go`、`task_asset_blocking.go`、`asset_origins.go`、`derived_asset_parents.go`、`agent/asset_context.go`（约 1159 行加前端） | “这四组先都跳过” | 这是 SERIES 的“未审批资产不可读”闸门；ARTEX 用拦截规则替代，搬过来等于给 ARTEX 加读取限制，与“渗透能力优先”冲突 | 先确认是否愿意接受读取闸门，再按块立项 |
+| 人工控制三件（managed/manual 执行模式、worker 队列拖拽排序、主 Agent 下发待审批意图） | SERIES `db/execution_mode.go`、`db/worker_queue.go`、`agent/main_execution.go`（约 600 行加前端） | “这四组先都跳过” | 都是给人插手的入口，与既定“不引入人工审批阻断”冲突 | 需要先改这条原则 |
+| 禁报规则 + 漏洞删除反馈 | SERIES `db/finding_suppression.go`、`finding_deletion_feedback.go`、`server/finding_suppression.go`、`agent/finding_feedback_context.go`（约 464 行） | “这四组先都跳过” | 曾移植（`a01fd25`）后被 `e798b64` 整体撤销，代码中已不存在；回滚原因未写进提交信息，重做前必须先查清 | 先查 `e798b64` 回滚原因，再决定是否按原版重搬 |
 
 补充：第 5 条的前端已搬（`cf1681a`：`api.ts`、发现页导出弹窗、详情页「提交报告」+ 技术附录折叠）；任务发现页的批量导出入口也已补齐（`findings-tab.tsx`：勾选/全选 → `md-report-zip`）。SERIES 的 `mock/finding-export.ts` 是测试替身，ARTEX mock 层没有对应实现，未搬，不影响真实环境导出。
 
@@ -64,6 +67,7 @@
 - ARTEX 未配 LLM，所以**没有跑过真实任务**：工具挂载、报告校验、经验注入目前只有单元测试与库级验证。
 - Windows 下 `TestFindingWorkflowReporterBindsBeforeWritingReport` 因临时目录证据文件同步报 `Access is denied`，与报告改动无关。
 - `server/webui/dist/index.html` 被替换为跳转 `/login/` 的静态页（静态导出不支持服务端 redirect），属产物覆盖，不是源码改动。
+- **安全待修（非移植）**：`FEATURE-DIFF.md` 第 55 行记录——ARTEX 校验 JWT 时只判 Bearer 与 `artex_token` cookie，不校验签名算法（`alg`），存在算法混淆风险；SERIES 会校验 `alg` 与 subject。修它不属于搬功能，但优先级高于待搬项。
 
 ## 五、移植缺口（未完成，别当等价）
 
@@ -71,7 +75,7 @@
 |---|---|---|---|---|
 | 5 | 报告统一 | 无（前端、任务发现页批量导出均已搬；SERIES 的 `mock/finding-export.ts` 是测试替身，未搬） | — | — |
 | 7 | 意图取消 | ~~用户取消锁、领取过滤、通知规划者~~ 已补（`e5286c0`）；仅缺 SERIES 的 355 行 server 级测试 | 无功能缺口 | 可选：补等价测试 |
-| 8 | 禁报规则 | 上报前模型自审、资产/worker 事务级权限校验、禁报清单注入 planner/worker 提示、前端规则管理页 | 模型会先尝试上报一次再被拒；无越权兜底 | 约 500–700 行 |
+| 8 | 禁报规则（已回滚） | 整块能力不存在：`a01fd25` 加入的表、删除即禁报、上报前拦截、查看/解除接口，被 `e798b64` 全部撤销 | 用户删掉漏洞后，agent 会重复报同类 | 见第二节“禁报规则 + 漏洞删除反馈” |
 | 13 | 任务未读角标 | SERIES 还统计“新资产”“待审批项”；ARTEX 只统计漏洞 | 资产/审批两类提示缺失 | 需先移植资产审批体系（红区，已定不搬） |
 | 14 | 流量压缩/保留期 | SERIES 还有静态资源过滤（默认不录 JS/CSS/图片/字体） | 静态资源仍会入流量库 | 按“不减少可读信息”不搬；需要时再评估按 content-type 跳过 |
 | 15 | shell 声明+命令计量 | Bash 解析只认字面量（`$VAR`/`$(...)`/`bash -c` 字符串不计数，SERIES 同样如此）；同名冲突提示已补（`e94537a`，浏览器实测正/负向） | 复杂拼接命令不会被归因，属原版已知限制 | 无（如需支持需自定义解析，会偏离原版） |
