@@ -50,11 +50,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { SessionToolCalls } from "@/components/session-tool-calls";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { useSideQuestions } from "@/hooks/use-side-questions";
 import { mergeActivities } from "@/lib/activity-merge";
 import { api } from "@/lib/api";
+import { toolCallRevision } from "@/lib/tool-calls";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { isBtwCommand } from "@/lib/side-questions";
@@ -793,6 +795,7 @@ function ChatView({
       <ApprovalExecutionFocus focus={approvalFocus} history={focusHistory} />
 
       {/* messages */}
+      <SessionToolCalls base={`/conversations/${conv.id}/tool-calls`} revision={toolCallRevision(messages, running)}>
       <ScrollArea type="auto" className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
         <div className="min-w-0 max-w-full px-4 py-3" ref={contentRef}>
           {messages.length === 0 && !running ? (
@@ -809,6 +812,7 @@ function ChatView({
           )}
         </div>
       </ScrollArea>
+      </SessionToolCalls>
 
       <Composer
         value={input}

@@ -46,6 +46,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton } from "@/components/ui/input-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { SessionToolCalls } from "@/components/session-tool-calls";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -69,6 +70,7 @@ import type {
   TokenTotal,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { toolCallRevision } from "@/lib/tool-calls";
 
 // resolutionLabel names the LLM a session runs on. The badge shows this alone and
 // keeps the model id in its tooltip. Env-backed configs can arrive without a name,
@@ -1867,6 +1869,10 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             to block so wide/unbreakable steps (long commands, code, URLs) can't blow
             out the width and defeat the truncation below — the transcript wraps to
             the panel instead of overflowing horizontally. */}
+            <SessionToolCalls
+              base={`/exploration/tool-calls?task=${encodeURIComponent(taskId)}&session=${encodeURIComponent(activeKey)}`}
+              revision={toolCallRevision(activity, active.live)}
+            >
             <ScrollArea type="auto" className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
               <div className="min-w-0 max-w-full p-4" ref={contentRef}>
                 {activeState?.loadingMore && (
@@ -1908,6 +1914,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                 )}
               </div>
             </ScrollArea>
+            </SessionToolCalls>
             {isMain ? (
               <div className="border-t p-3">
                 {attachments.length > 0 && (

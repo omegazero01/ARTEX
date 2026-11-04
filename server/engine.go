@@ -135,6 +135,7 @@ type Engine struct {
 	steerBox map[int64][]string
 
 	plannerRound sync.Map // taskID -> int, planner round counter (for UI round separators)
+	plannerActive sync.Map // taskID -> bool, planner.Plan 正在跑（工具调用明细用它判断“执行中”）
 
 	// 任务级超时(见 docs/任务级超时与收尾设计.md):
 	settling     sync.Map // taskID -> bool, 任务已进入收尾时序(停止派/领新意图)
@@ -955,7 +956,9 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		triggers := t.drainTriggers()
 		taskIDInt, _ := strconv.ParseInt(t.ID, 10, 64)
 		e.BeginLLMCall(t.ID)
+		e.plannerActive.Store(t.ID, true)
 		met, reason, err := planner.Plan(ectx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)
+		e.plannerActive.Delete(t.ID)
 		e.EndLLMCall(t.ID)
 		switch {
 		case err != nil && ectx.Err() == nil:

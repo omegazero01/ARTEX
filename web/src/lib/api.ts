@@ -5,6 +5,7 @@
 
 import type { ChatMention } from "@/lib/chat-mentions";
 import { MOCK } from "@/lib/mock/enabled";
+import { type ToolCallFilter, type ToolCallPage, type ToolCallText, parseToolCallPage, toolCallURL } from "@/lib/tool-calls";
 import { mockHandle } from "@/lib/mock/handler";
 import type {
   ActiveFindingRetest,
@@ -733,6 +734,11 @@ export const api = {
     }));
   },
   activityDetail: (id: number, task?: string) => get<{ detail: string }>(`/exploration/activity/${id}${tq(task)}`),
+  // 工具调用明细：base 由调用方给出（已含 task/session 或 conversation），游标与筛选都在 URL 上。
+  toolCalls: (base: string, filters: ToolCallFilter, signal?: AbortSignal) =>
+    get<ToolCallPage>(toolCallURL(base, filters), { signal }).then(parseToolCallPage),
+  toolCallDetail: (base: string, id: number, offset: number, signal?: AbortSignal) =>
+    get<ToolCallText>(toolCallURL(base, {}, id, offset), { signal }),
   // Reverse-paginated session history. session = "main" | "plan" | "intent:<id>".
   // before=0 → latest page; before=<id> → the older page ending before that id.
   // snapshotCursor is the TASK-level max id at query time — open the task SSE at
