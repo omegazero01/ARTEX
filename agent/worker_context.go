@@ -14,21 +14,13 @@ func (t *ToolSet) workerLaunchContext(ctx context.Context, intentID int64) strin
 	if err != nil {
 		return "\n关联事实读取失败。"
 	}
-	parents, err := target.ts.ContextParents(ctx, intentID, 0, 8)
+	parents, err := target.ts.ContextParents(ctx, intentID, 0, 20)
 	if err != nil {
 		return "\n关联事实读取失败；可通过 context_get 按已知引用重试。"
 	}
-	more := len(parents) > 8
+	more := len(parents) > 20
 	if more {
-		parents = parents[:8]
-	}
-	for len(parents) > 0 {
-		raw, _ := json.Marshal(parents)
-		if utf8.RuneCount(raw) <= 3300 {
-			break
-		}
-		parents = parents[:len(parents)-1]
-		more = true
+		parents = parents[:20]
 	}
 	result := map[string]any{"parents": parents, "has_more": more}
 	if more && len(parents) > 0 {

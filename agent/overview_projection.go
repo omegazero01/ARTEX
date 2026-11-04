@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	plannerOverviewRunes     = 24000
-	plannerLeanOverviewRunes = 10000
+	plannerOverviewRunes     = 48000
+	plannerLeanOverviewRunes = 24000
 )
 
 // OverviewProfile selects how much of the exploration graph the planner sees

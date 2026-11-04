@@ -73,5 +73,5 @@ func (p assetContextProvider) filter(ctx context.Context, req llm.CompletionRequ
 			b.Content[r.c].Text += r.suffix
 		}
 	}
-	return projectRequestBudget(ctx, out), nil
+	return out, nil
 }

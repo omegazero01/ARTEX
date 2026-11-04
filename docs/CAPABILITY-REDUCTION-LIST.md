@@ -16,6 +16,19 @@
 
 ## 二、第一类：纯限制，删掉不影响其他功能
 
+> **执行进度**：第 1、2、3、4、5、6、7 项已实施。第 4、5、7 项取值：
+> planner 引导 8000 → 48000 字、`records_limit` 8 → 50；态势 Full 预设事实 20→100、漏洞 10→50、
+> 完成意图 12→40、提示 50→100、冷摘要 15→40，预算 24000→48000；Lean 预设事实 8→40、
+> 漏洞 3→20、完成意图 5→20、提示 10→40、冷摘要 3→20，预算 10000→24000；上限同步放宽到
+> 事实 200 / 漏洞 100 / 完成意图 100 / 提示 200 / 冷摘要 100 / 预算 200000；
+> 态势文本截断 300–500 字 → 2000 字；流量单条正文上限 64 MB → 512 MB。
+> 取值依据：48000 字按中文最多约 4.8 万 token 估，占 128k 窗口约 37%，仍给历史和工具结果留空间。
+> 已完成项的证据：`agent/request_budget.go`、`agent/incremental_compaction.go` 及其 4 个测试文件
+> 已删除（净减 1000 行以上）；`agent/context_budget.go` 改为不限上限（新增两个用例
+> `TestToolOutputHasNoBudgetCap`、`TestReadContentBudgetKeepsRequested` 通过）；
+> `agent/worker_context.go` 上游事实由 8 条恢复为 20 条并去掉 3300 字截断；
+> `agent/compaction.go` 不再调用折叠调度。`go build ./...` 通过，`go test ./agent` 通过。
+
 | # | 位置 | 现在（SERIES） | 原版 | 删掉后的变化 | 改动量 |
 |---|---|---|---|---|---|
 | 1 | `agent/request_budget.go`（611 行） | planner 每请求 32000 字 / 128 KB；worker 48000 字 / 192 KB；超限把旧工具调用整段换成"回执索引"，模型只能看到引用，原文要再读 | 无此文件 | 历史工具结果保持完整正文，模型不用二次读取 | 删文件 + 1 处调用（`agent/noa_asset_context.go:76`） |

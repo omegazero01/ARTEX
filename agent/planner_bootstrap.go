@@ -12,7 +12,7 @@ import (
 	"github.com/neouks/series/db"
 )
 
-const plannerBootstrapRunes = 8000
+const plannerBootstrapRunes = 48000
 const plannerRetrievalRule = `
 【Planner 规划与下发流程，替代旧版查询前置要求】依据任务目标、本轮事件和已有上下文判断下一步。信息足够时直接调用 add_intent，无需先查询已有意图、资产或探索图；仅在信息不足、资产身份不明或需要核对历史进度时按需检索。仅监督或等待结果时复用已有信息，不增加固定查询。
 结合已知的排队、运行和历史方向避免重复；数据库仍执行去重。不要把旧提示词或历史中的先查后建要求作为下发前置步骤。检索工具被禁用、未查询或尚有下一页，均不单独阻止合法意图提交；权限和执行约束照常检查。
@@ -151,7 +151,7 @@ func (t *ToolSet) plannerBootstrap(ctx context.Context, triggers []TriggerEvent)
 	for _, k := range kinds {
 		reads[k] = map[string]any{"tool": "context_search", "args": map[string]any{"types": []string{k}, "limit": 10}}
 	}
-	out := map[string]any{"scope": "current_task_and_direct_sources", "events": events, "read": reads, "records": []db.PlannerContextRecord{}, "records_limit": 8, "records_are_related_sample": true,
+	out := map[string]any{"scope": "current_task_and_direct_sources", "events": events, "read": reads, "records": []db.PlannerContextRecord{}, "records_limit": 50, "records_are_related_sample": true,
 		"note": "计数为当前授权可见记录；目标和战略提示未展示时按需检索，不能仅凭计数判定完成。无查询权限的类型不提供记录。"}
 	if len(seen) > len(seeds) {
 		out["events_truncated"] = true

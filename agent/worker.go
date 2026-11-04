@@ -497,7 +497,6 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// 不把它的 schema 重复发送给每一次 completion。
 	base = append(base, workerLocalTools()...)
 	ctx = withContextObserver(ctx, emit)
-	ctx = context.WithValue(ctx, contextOutputDirectoryKey{}, cmdOutDir(runDir))
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts), IntentID: intent.ID, AgentKey: "worker"})
 	ctx = WithTaskToolSet(ctx, tsx)
 	tools, def, cleanup, err := AugmentTools(ctx, "worker", base)

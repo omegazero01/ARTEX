@@ -414,9 +414,6 @@ func readTool(name, desc string, schema map[string]any, run func(context.Context
 		Concurrent:  func(json.RawMessage) bool { return true },
 		Permissions: func(context.Context, json.RawMessage, acperm.Context) acperm.Decision { return acperm.Allowed() },
 		Run: func(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
-			if tc != nil && tc.MaxOutputChars > 0 {
-				ctx = context.WithValue(ctx, readBudgetKey{}, tc.MaxOutputChars)
-			}
 			started := time.Now()
 			res, err := run(ctx, in)
 			if retrievalTool(name) {

@@ -8,13 +8,13 @@ import "fmt"
 // settings payloads remain backward compatible.
 const (
 	OverviewMinBudgetRunes = 2000
-	OverviewMaxBudgetRunes = 48000
+	OverviewMaxBudgetRunes = 200000
 	OverviewMaxGoals       = 100
-	OverviewMaxRecentFacts = 20
-	OverviewMaxFindings    = 10
-	OverviewMaxDoneIntents = 12
-	OverviewMaxHints       = 50
-	OverviewMaxColdDigests = 15
+	OverviewMaxRecentFacts = 200
+	OverviewMaxFindings    = 100
+	OverviewMaxDoneIntents = 100
+	OverviewMaxHints       = 200
+	OverviewMaxColdDigests = 100
 )
 
 // OverviewLimits controls how much of one graph_overview section is handed to
@@ -64,20 +64,20 @@ func DefaultOverviewConfig() OverviewConfig {
 		Full: OverviewLimits{
 			BudgetRunes:       plannerOverviewRunes,
 			Goals:             OverviewMaxGoals,
-			RecentFacts:       OverviewMaxRecentFacts,
-			Findings:          OverviewMaxFindings,
-			RecentDoneIntents: OverviewMaxDoneIntents,
-			Hints:             OverviewMaxHints,
-			ColdDigests:       OverviewMaxColdDigests,
+			RecentFacts:       100,
+			Findings:          50,
+			RecentDoneIntents: 40,
+			Hints:             100,
+			ColdDigests:       40,
 		},
 		Lean: OverviewLimits{
 			BudgetRunes:       plannerLeanOverviewRunes,
-			Goals:             20,
-			RecentFacts:       8,
-			Findings:          3,
-			RecentDoneIntents: 5,
-			Hints:             10,
-			ColdDigests:       3,
+			Goals:             50,
+			RecentFacts:       40,
+			Findings:          20,
+			RecentDoneIntents: 20,
+			Hints:             40,
+			ColdDigests:       20,
 		},
 	}
 }

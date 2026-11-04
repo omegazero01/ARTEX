@@ -118,7 +118,7 @@ func leanGoalRows(rows []map[string]any, limit int) []map[string]any {
 		out = append(out, map[string]any{
 			"id":    row["id"],
 			"state": row["state"],
-			"text":  leanText(row["text"], 500),
+			"text":  leanText(row["text"], 2000),
 		})
 	}
 	return out
@@ -134,7 +134,7 @@ func leanIntentRows(rows []map[string]any, limit int, terminal bool) []map[strin
 	for _, row := range rows {
 		m := map[string]any{
 			"id":      row["id"],
-			"summary": leanText(row["summary"], 300),
+			"summary": leanText(row["summary"], 2000),
 			"state":   row["state"],
 		}
 		for _, key := range []string{"inherited", "source_task_id"} {
@@ -305,7 +305,7 @@ func leanFactMaps(rows []map[string]any) []map[string]any {
 	for _, row := range rows {
 		m := map[string]any{
 			"id":      row["id"],
-			"summary": leanText(row["summary"], 300),
+			"summary": leanText(row["summary"], 2000),
 		}
 		if v, ok := row["from_intent"]; ok {
 			m["from_intent"] = v
@@ -361,7 +361,7 @@ func leanFindingRows(rows []map[string]any, limit int) []map[string]any {
 	for _, row := range rows {
 		m := map[string]any{
 			"id":      row["id"],
-			"summary": leanText(row["summary"], 300),
+			"summary": leanText(row["summary"], 2000),
 		}
 		if v, ok := row["from_intent"]; ok {
 			m["from_intent"] = v
@@ -380,7 +380,7 @@ func leanHintRows(rows []map[string]any, limit int) []map[string]any {
 		out = append(out, map[string]any{
 			"id":    row["id"],
 			"state": row["state"],
-			"text":  leanText(row["text"], 300),
+			"text":  leanText(row["text"], 2000),
 		})
 		if limit > 0 && len(out) >= limit {
 			break

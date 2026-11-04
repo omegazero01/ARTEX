@@ -90,9 +90,11 @@ func (p *Planner) overviewConfig() OverviewConfig {
 	return p.overviewConfigFn().Normalize()
 }
 
-// MaintainGraph runs independently of model planning on a code-only heartbeat.
+// MaintainGraph 原本在独立心跳里触发图压缩；减代码后不再折叠旧节点，只保留入口为空实现，
+// 避免调用方改签名。
 func (p *Planner) MaintainGraph(ctx context.Context, ts *db.ExplorationStore) {
-	p.compactor.Schedule(ctx, ts)
+	_ = ctx
+	_ = ts
 }
 
 // SetNonStreaming wires a resolver deciding whether runs use the non-streaming
@@ -379,7 +381,6 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, g *
 	// 资产覆盖度关闭时移除 add_task_scope，保留普通资产检索。
 	base := append(tsx.DropCoverageTools(tsx.PlannerTools()), actool.NewBash())
 	ctx = withContextObserver(ctx, emit)
-	ctx = context.WithValue(ctx, contextOutputDirectoryKey{}, cmdOutDir(taskDir))
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts), AgentKey: "planner"})
 	ctx = WithTaskToolSet(ctx, tsx)
 	tools, def, cleanup, err := AugmentTools(ctx, "planner", base)

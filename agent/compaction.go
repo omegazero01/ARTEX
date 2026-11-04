@@ -38,8 +38,9 @@ func NewCompactor(prov llm.Provider, model string) *Compactor {
 	}
 }
 
-// OnPlannerRound performs only the O(1) compatibility round stamp. All graph
-// scanning and summarization is queued off the planning hot path.
+// OnPlannerRound performs only the O(1) compatibility round stamp.
+// 减代码：这里原本会调用 c.Schedule(ctx, ts) 触发“把旧节点折叠成导航摘要”的增量压缩。
+// 折叠会让模型在后续轮次只看到摘要而不是原文证据，因此去掉该调用：老节点保持原文。
 
 func (c *Compactor) OnPlannerRound(ctx context.Context, ts *db.ExplorationStore) {
 	if c == nil || c.prov == nil || ts == nil {
@@ -49,7 +50,6 @@ func (c *Compactor) OnPlannerRound(ctx context.Context, ts *db.ExplorationStore)
 		log.Printf("[compaction] round exp=%d: %v", ts.ID(), err)
 		return
 	}
-	c.Schedule(ctx, ts)
 }
 
 // Graph compaction is a separate run, not a planner retry or worker intent.

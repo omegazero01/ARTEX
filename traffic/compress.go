@@ -60,7 +60,7 @@ func zstdDecoder() *zstd.Decoder {
 const minCompressBody = 1024
 
 // Bounds legacy and imported blobs whose original capture size is unknown.
-const maxBlobBody = 64 << 20
+const maxBlobBody = 512 << 20
 
 // compressInline returns the body for an exchange_bodies column: prefixed and
 // zstd-compressed when smaller, unchanged otherwise.

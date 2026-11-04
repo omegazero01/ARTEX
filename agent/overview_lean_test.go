@@ -94,8 +94,8 @@ func TestLeanGraphOverviewProjection(t *testing.T) {
 		t.Fatal("lean projection mutated source")
 	}
 
-	if got := len(lean["goals"].([]map[string]any)); got != 20 {
-		t.Fatalf("goals=%d want 20", got)
+	if got := len(lean["goals"].([]map[string]any)); got != 25 {
+		t.Fatalf("goals=%d want 25", got)
 	}
 	open := lean["open_intents"].([]map[string]any)
 	if len(open) != 25 {
@@ -118,27 +118,27 @@ func TestLeanGraphOverviewProjection(t *testing.T) {
 		t.Fatalf("running=%d want 3", got)
 	}
 	done := lean["recent_done_intents"].([]map[string]any)
-	if len(done) != 5 {
+	if len(done) != 9 {
 		t.Fatalf("done=%d want 5", len(done))
 	}
 	if got := len(done[0]["yields"].([]int64)); got != 5 {
 		t.Fatalf("done yields=%d want 5", got)
 	}
-	if got := len(lean["recent_facts"].([]map[string]any)); got != 8 {
-		t.Fatalf("facts=%d want 8", got)
+	if got := len(lean["recent_facts"].([]map[string]any)); got != 12 {
+		t.Fatalf("facts=%d want 12", got)
 	}
-	if got := len(lean["finding_list"].([]map[string]any)); got != 3 {
-		t.Fatalf("findings=%d want 3", got)
+	if got := len(lean["finding_list"].([]map[string]any)); got != 6 {
+		t.Fatalf("findings=%d want 6", got)
 	}
 	hints := lean["hints"].([]map[string]any)
-	if len(hints) != 10 {
-		t.Fatalf("hints=%d want 10", len(hints))
+	if len(hints) != 15 {
+		t.Fatalf("hints=%d want 15", len(hints))
 	}
 	if _, exists := hints[0]["traffic_refs"]; exists {
 		t.Fatalf("lean hint kept traffic_refs: %v", hints[0])
 	}
-	if got := len(lean["cold_digests"].([]map[string]any)); got != 3 {
-		t.Fatalf("digests=%d want 3", got)
+	if got := len(lean["cold_digests"].([]map[string]any)); got != 5 {
+		t.Fatalf("digests=%d want 5", got)
 	}
 	if _, exists := lean["related_tasks"]; exists {
 		t.Fatal("lean overview should omit related_tasks bodies")
@@ -381,14 +381,14 @@ func TestOverviewConfigDefaultsAndValidation(t *testing.T) {
 	if def.Full.BudgetRunes != plannerOverviewRunes || def.Lean.BudgetRunes != plannerLeanOverviewRunes {
 		t.Fatalf("budgets=%+v", def)
 	}
-	if def.Full.RecentFacts != 20 || def.Lean.RecentFacts != 8 {
+	if def.Full.RecentFacts != 100 || def.Lean.RecentFacts != 40 {
 		t.Fatalf("facts=%+v", def)
 	}
 	if err := ValidateOverviewConfig(def); err != nil {
 		t.Fatalf("default config invalid: %v", err)
 	}
 	bad := def
-	bad.Lean.RecentFacts = 21
+	bad.Lean.RecentFacts = 201
 	if err := ValidateOverviewConfig(bad); err == nil {
 		t.Fatal("expected facts > max to be rejected")
 	}
@@ -402,7 +402,7 @@ func TestOverviewConfigDefaultsAndValidation(t *testing.T) {
 		t.Fatalf("zero should mean default: %v", err)
 	}
 	norm := partial.Normalize()
-	if norm.Lean.RecentFacts != 8 || norm.Full.RecentFacts != 20 {
+	if norm.Lean.RecentFacts != 40 || norm.Full.RecentFacts != 100 {
 		t.Fatalf("normalized=%+v", norm)
 	}
 }

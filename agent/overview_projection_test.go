@@ -51,7 +51,7 @@ func TestOverviewProjectionFairSections(t *testing.T) {
 		t.Fatal("source mutated")
 	}
 	prompt := renderPlannerOverview(data, OverviewFull)
-	if utf8.RuneCountInString(prompt) > 24000 {
+	if utf8.RuneCountInString(prompt) > 48000 {
 		t.Fatal("prompt wrappers exceed budget")
 	}
 	old := renderLightTaggedOrdered("graph_overview", data, []string{"task", "goals", "open_intents"}, 24000)
