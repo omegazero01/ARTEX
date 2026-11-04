@@ -1870,6 +1870,19 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             out the width and defeat the truncation below — the transcript wraps to
             the panel instead of overflowing horizontally. */}
             <SessionToolCalls
+              taskId={taskId}
+              session={activeKey}
+              onLocate={() => {
+                atBottomRef.current = false;
+              }}
+              onLatest={() => {
+                approvalFocus.close();
+                atBottomRef.current = true;
+                requestAnimationFrame(() => {
+                  const vp = contentRef.current?.closest('[data-slot="scroll-area-viewport"]');
+                  if (vp) vp.scrollTop = vp.scrollHeight;
+                });
+              }}
               base={`/exploration/tool-calls?task=${encodeURIComponent(taskId)}&session=${encodeURIComponent(activeKey)}`}
               revision={toolCallRevision(activity, active.live)}
             >

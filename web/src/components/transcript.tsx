@@ -356,11 +356,15 @@ function ToolBlock({
   getDetail,
   showWorker,
   focused = false,
+  onLocated,
+  focusLabel = "搜索结果",
 }: {
   group: Extract<Group, { type: "tool" }>;
   getDetail: (seq: number) => Promise<string>;
   showWorker?: boolean;
   focused?: boolean;
+  onLocated?: (el: HTMLElement) => void;
+  focusLabel?: string;
 }) {
   const [open, setOpen] = React.useState(focused);
   const targetRef = React.useRef<HTMLElement>(null);
@@ -420,6 +424,7 @@ function ToolBlock({
   }, [focused]);
   React.useEffect(() => {
     if (!focused || !open || detail === null || scrolledRef.current) return;
+    if (onLocated) return; // 由来源视图定位并高亮，避免两边同时滚动
     const el = targetRef.current;
     const viewport = el?.closest('[data-slot="scroll-area-viewport"]');
     if (!el || !viewport) return;
@@ -450,6 +455,15 @@ function ToolBlock({
     };
   }, [focused, open, detail]);
 
+  // 详情加载完成后把根节点交给来源视图：由它统一滚动并高亮关键词。
+  React.useEffect(() => {
+    if (!focused || !open || detail === null || !onLocated) return;
+    const frame = requestAnimationFrame(() => {
+      if (targetRef.current) onLocated(targetRef.current);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focused, open, detail, onLocated, focusLabel]);
+
   function toggle() {
     setOpen((o) => !o);
   }
@@ -457,6 +471,7 @@ function ToolBlock({
   return (
     <section
       ref={targetRef}
+      data-activity-id={use?.seq ?? result?.seq}
       aria-label={focused ? `定位的工具调用 #${use?.seq}` : undefined}
       className={focused ? "rounded-lg border-2 border-primary bg-primary/5 p-3 text-xs" : "text-xs"}
     >
@@ -471,7 +486,11 @@ function ToolBlock({
         <span className={"ml-auto shrink-0 font-medium " + statusTone}>{statusText}</span>
       </button>
       {open && (
-        <pre className="ml-7 mb-1 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed">
+        <pre
+          data-search-activity={use?.seq ?? result?.seq}
+          data-search-body
+          className="ml-7 mb-1 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed"
+        >
           {detail ?? "加载中…"}
         </pre>
       )}
@@ -672,6 +691,60 @@ function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: num
   );
 }
 
+// LocatedActivity 渲染“被搜索定位到的那一条普通消息”：不等进入视口，直接拉全文，
+// 挂上活动编号与正文标记，交给来源视图滚动+高亮（移植自 SERIES）。
+function LocatedActivity({
+  step,
+  getDetail,
+  onLocated,
+}: {
+  step: Activity;
+  getDetail: (seq: number) => Promise<string>;
+  onLocated?: (el: HTMLElement) => void;
+}) {
+  const root = React.useRef<HTMLDivElement>(null);
+  const [body, setBody] = React.useState<string | null>(null);
+  const [error, setError] = React.useState(false);
+  const [retry, setRetry] = React.useState(0);
+  React.useEffect(() => {
+    let current = true;
+    setBody(null);
+    setError(false);
+    getDetail(step.seq)
+      .then((v) => {
+        if (current) setBody(v || step.summary);
+      })
+      .catch(() => {
+        if (current) setError(true);
+      });
+    return () => {
+      current = false;
+    };
+  }, [step.seq, step.summary, getDetail, retry]);
+  React.useEffect(() => {
+    if (body === null && !error) return;
+    const frame = requestAnimationFrame(() => {
+      if (root.current) onLocated?.(root.current);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [body, error, onLocated]);
+  return (
+    <div ref={root} data-activity-id={step.seq} className="my-2 min-w-0 rounded-md border border-primary p-2">
+      {error ? (
+        <Button variant="outline" size="sm" onClick={() => setRetry((n) => n + 1)}>
+          详情加载失败，重试
+        </Button>
+      ) : body === null ? (
+        "加载中…"
+      ) : (
+        <div data-search-body>
+          <Markdown text={body} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ExecView renders an agent execution replay (planner / worker / main agent) in
 // the compact, grouped, expand-to-detail format — thinking, tool calls/results,
 // and (for the main agent) the human turns. Worker lane chips show only when the
@@ -682,12 +755,18 @@ function ExecView({
   chat,
   fetchDetail,
   focusedSeq,
+  focusActivity,
+  onLocated,
+  focusLabel,
 }: {
   activity: Activity[];
   taskId?: string;
   chat?: boolean;
   fetchDetail?: (seq: number) => Promise<string>;
   focusedSeq?: number;
+  focusActivity?: number;
+  onLocated?: (el: HTMLElement) => void;
+  focusLabel?: string;
 }) {
   const showWorker = new Set(activity.map((a) => a.worker)).size > 1;
   // default detail fetcher: the task-scoped activity endpoint. The chat page passes
@@ -706,19 +785,38 @@ function ExecView({
             <span className="h-px flex-1 bg-border" />
           </div>
         ) : g.type === "user" ? (
-          <UserRow key={"u" + g.key} step={g.step} intent={g.intent} getDetail={getDetail} />
+          focusActivity === g.step.seq ? (
+            <LocatedActivity key={"lu" + g.key} step={g.step} getDetail={getDetail} onLocated={onLocated} />
+          ) : (
+            <UserRow key={"u" + g.key} step={g.step} intent={g.intent} getDetail={getDetail} />
+          )
         ) : g.type === "answer" ? (
-          <AnswerBlock key={"a" + g.key} step={g.step} getDetail={getDetail} />
+          focusActivity === g.step.seq ? (
+            <LocatedActivity key={"la" + g.key} step={g.step} getDetail={getDetail} onLocated={onLocated} />
+          ) : (
+            <AnswerBlock key={"a" + g.key} step={g.step} getDetail={getDetail} />
+          )
         ) : g.type === "tool" ? (
           <ToolBlock
             key={"t" + g.key}
             group={g}
             getDetail={getDetail}
             showWorker={showWorker}
-            focused={focusedSeq != null && g.use?.seq === focusedSeq}
+            focused={
+              (focusedSeq != null && g.use?.seq === focusedSeq) ||
+              (focusActivity != null && (g.use?.seq === focusActivity || g.result?.seq === focusActivity))
+            }
+            onLocated={onLocated}
+            focusLabel={focusLabel}
           />
         ) : g.type === "intercept" ? (
-          <InterceptCard key={"ic" + g.key} step={g.step} getDetail={getDetail} />
+          focusActivity === g.step.seq ? (
+            <LocatedActivity key={"li" + g.key} step={g.step} getDetail={getDetail} onLocated={onLocated} />
+          ) : (
+            <InterceptCard key={"ic" + g.key} step={g.step} getDetail={getDetail} />
+          )
+        ) : g.steps.some((st) => st.seq === focusActivity) ? (
+          <LocatedActivity key={"lm" + g.key} step={g.steps[0]} getDetail={getDetail} onLocated={onLocated} />
         ) : (
           <MessageBlock key={"m" + g.key} group={g} getDetail={getDetail} showWorker={showWorker} />
         ),
@@ -737,6 +835,9 @@ export function Transcript({
   chat,
   fetchDetail,
   focusedSeq,
+  focusActivity,
+  onLocated,
+  focusLabel,
 }: {
   activity: Activity[];
   live?: boolean;
@@ -744,6 +845,9 @@ export function Transcript({
   chat?: boolean;
   fetchDetail?: (seq: number) => Promise<string>;
   focusedSeq?: number;
+  focusActivity?: number;
+  onLocated?: (el: HTMLElement) => void;
+  focusLabel?: string;
 }) {
   const transcriptRef = React.useRef<HTMLDivElement>(null);
   const [focusPadding, setFocusPadding] = React.useState(0);
@@ -759,7 +863,16 @@ export function Transcript({
   }, [focusedSeq]);
   return (
     <div ref={transcriptRef} className="flex flex-col gap-1" style={focusPadding ? { paddingBlock: focusPadding } : undefined}>
-      <ExecView activity={activity} taskId={taskId} chat={chat} fetchDetail={fetchDetail} focusedSeq={focusedSeq} />
+      <ExecView
+        activity={activity}
+        taskId={taskId}
+        chat={chat}
+        fetchDetail={fetchDetail}
+        focusedSeq={focusedSeq}
+        focusActivity={focusActivity}
+        onLocated={onLocated}
+        focusLabel={focusLabel}
+      />
       {live && (
         <div className="flex items-center gap-2 pl-2 pt-1 text-xs text-muted-foreground">
           <span className="flex gap-1">

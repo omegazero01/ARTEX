@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
+import { SessionSearch } from "@/components/session-search";
 import { extraToolName, type ToolCall, type ToolCallPage, type ToolCallText } from "@/lib/tool-calls";
 
 const types = { builtin: "内置", custom: "自定义", mcp: "MCP", unknown: "未知" };
@@ -34,10 +35,6 @@ export function SessionToolCalls({
   onLocate?: () => void;
   onLatest?: () => void;
 }) {
-  void taskId;
-  void session;
-  void onLocate;
-  void onLatest;
   const [tab, setTab] = useState("chat");
   return (
     <Tabs value={tab} onValueChange={setTab} className="min-h-0 min-w-0 flex-1 gap-0">
@@ -46,7 +43,20 @@ export function SessionToolCalls({
         <TabsTrigger value="tools">工具调用</TabsTrigger>
       </TabsList>
       <TabsContent value="chat" forceMount className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
-        {children}
+        {taskId && session ? (
+          <SessionSearch
+            key={`${taskId}:${session}`}
+            taskId={taskId}
+            session={session}
+            enabled={tab === "chat"}
+            onLocate={onLocate}
+            onLatest={onLatest}
+          >
+            {children}
+          </SessionSearch>
+        ) : (
+          children
+        )}
       </TabsContent>
       <TabsContent value="tools" className="min-h-0 flex-1 overflow-auto px-3 pb-3">
         <ToolCallList key={base} base={base} revision={revision} />
