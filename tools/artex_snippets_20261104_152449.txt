@@ -1,6 +1,0 @@
-# http://82.158.89.11  身份:uid=0(root) gid=0(root) groups=0(root)  模型:/  base_url:默认官方
-const t = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJBUlRFWCIsImlhdCI6MTc5Mzc3Njc2NywiZXhwIjoxNzk0MzgxNTY3LCJqdGkiOiI4MmM5YWJjNDI4YzQ0NmRhIn0.pfXFrPTLj1Z5sP2cQ8cG3_UucOYZ9atSUyo7tURTCss';
-localStorage.setItem('artex_token', t);
-document.cookie = 'artex_token=' + encodeURIComponent(t) + '; path=/; max-age=604800; SameSite=Lax';
-location.href = '/';
-
