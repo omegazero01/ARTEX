@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Autumn-27/artex/db"
@@ -125,5 +126,76 @@ func TestConversationToolCallsHTTPIsolation(t *testing.T) {
 	w = get(base + "?status=running")
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &p) != nil || len(p.Items) != 20 || p.Items[0].Status != "running" {
 		t.Fatalf("running page %d %s", w.Code, w.Body.String())
+	}
+}
+
+// 任务维度：继承会话只在节点进入终态后可读，且只能读到源任务的 worker 明细，
+// 源任务的主会话（main）与别的会话都不能通过 id 越权读到。
+func TestTaskToolCallsInheritedIsolation(t *testing.T) {
+	dsn, _, err := db.DSN()
+	if err != nil {
+		t.Skip(err)
+	}
+	pg, err := db.Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	m := &Manager{pg: pg, tasks: map[string]*Task{}}
+	s := &Server{m: m, chatBusy: map[string]bool{}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /exploration/tool-calls", s.taskToolCalls)
+	mux.HandleFunc("GET /exploration/tool-calls/{seq}", s.taskToolCalls)
+	get := func(path string) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		return w
+	}
+	source, err := pg.CreateTask("source", "tools", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteTask(source.ID)
+	current, err := pg.CreateTaskWithOptions("current", "tools", db.TaskCreateOptions{SourceTaskIDs: []int64{source.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteTask(current.ID)
+	store := pg.Exploration(source.ExplorationID)
+	intent, err := store.AddIntent(map[string]any{"summary": "source worker"}, 5, nil, "planner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	use, err := store.AppendActivity(db.Activity{Worker: "work#1", NodeID: &intent, Kind: "tool_use", Tool: "Bash", ToolUseID: "source", Detail: "source input"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainID, err := store.AppendActivity(db.Activity{Worker: "mainagent", Kind: "tool_use", Tool: "Bash", ToolUseID: "source", Detail: "private source main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tid := strconv.FormatInt(current.ID, 10)
+	m.tasks[tid] = &Task{ID: tid, ExpID: current.ExplorationID, Store: pg.Exploration(current.ExplorationID)}
+	params := fmt.Sprintf("?task=%s&session=intent:%d", tid, intent)
+	if w := get("/exploration/tool-calls" + params); w.Code != 404 {
+		t.Fatalf("nonterminal inherited worker exposed: %d %s", w.Code, w.Body.String())
+	}
+	if err = store.SetIntentState(intent, "done"); err != nil {
+		t.Fatal(err)
+	}
+	w := get("/exploration/tool-calls" + params)
+	var p db.ToolCallPage
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &p) != nil || !p.ReadOnly || p.SourceTaskID != source.ID || len(p.Items) != 1 || p.Items[0].Status != "missing" {
+		t.Fatalf("inherited %d %s", w.Code, w.Body.String())
+	}
+	if w = get(fmt.Sprintf("/exploration/tool-calls/%d%s", mainID, params)); w.Code != 404 {
+		t.Fatalf("source main leaked: %d %s", w.Code, w.Body.String())
+	}
+	if w = get(fmt.Sprintf("/exploration/tool-calls/%d%s", use, params)); w.Code != 200 || !strings.Contains(w.Body.String(), "source input") {
+		t.Fatalf("source detail unavailable: %d %s", w.Code, w.Body.String())
+	}
+	if w = get(fmt.Sprintf("/exploration/tool-calls/%d?task=%s&session=main:0", use, tid)); w.Code != 404 {
+		t.Fatalf("cross-session worker detail leaked: %d %s", w.Code, w.Body.String())
 	}
 }

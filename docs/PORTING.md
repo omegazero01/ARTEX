@@ -87,4 +87,3 @@
 | 6 | 收尾禁 Bash | 与 SERIES 实现位置不同（`sdk_session.go` → worker 包装 + hook），行为等价但无原版测试 | 无功能缺口 | 可选：补等价测试 |
 | 19 | 结构化现场复现 | 原版校验「复现步骤引用的流量，其主机必须在本任务资产范围内且已审批」（`validateReproductionTrafficTx`，依赖 `task_asset_links` 与审批状态）未搬 | 只能保证引用的流量已绑定到本漏洞；不能保证其目标主机在本任务授权范围内（与缺口 17 同源） | 需先有资产审批体系（红区，已定不搬） |
 | 20 | 工具调用明细 | ARTEX 没有 SERIES 的 `SessionSearch`（会话内关键词检索并定位到活动）；「对话」页签里少了这条检索栏 | 只影响“在对话里搜关键词定位”，不影响工具调用列表、筛选与详情 |
-| 21 | 工具调用明细 | SERIES 的 `TestToolCallsHTTPIsolationAndZeroModelWrites` 只搬了会话维度（分页 20+3、`q/type/status` 筛选、详情 `limit`/`offset=99999`、跨会话 id 404、`limit=60` 400、`status=running`、只读不改 `llm_usage`/`tool_usage`/`conversation_activities` 计数）；任务维度（`taskToolCalls` 经 `Manager.ResolveTask`、主会话 `main_seg`、继承会话 `source`）无等价用例 | 任务维度只有 db 层与参数解析覆盖，HTTP 层没验证；重启后建议手工点开任务「会话」页确认一次 |
