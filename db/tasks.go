@@ -5,27 +5,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"time"
 )
 
 // Task is a row in the task registry (1:1 with an exploration).
 type Task struct {
-	ID            int64      `json:"id"`
-	Name          string     `json:"name"` // 可选任务名称;空=未命名
-	CategoryID    *int64     `json:"category_id,omitempty"`
-	CategoryName  string     `json:"category_name,omitempty"`
-	Pinned        bool       `json:"pinned"`
-	PinnedAt      *time.Time `json:"pinned_at,omitempty"`
-	Description   string     `json:"description"`
-	Goal          string     `json:"goal"`
-	ExplorationID int64      `json:"exploration_id"`
-	Status        string     `json:"status"`
-	Paused        bool       `json:"paused"`
-	Queued        bool       `json:"queued"`
-	QueuedAt      *time.Time `json:"queued_at,omitempty"`
-	QueueMode     string     `json:"queue_mode,omitempty"`
-	LLMProfileID  *int64     `json:"llm_profile_id,omitempty"`
+	ExecutionMode         string     `json:"execution_mode"`
+	AssetApprovalTemplate string     `json:"asset_approval_template"`
+	ID                    int64      `json:"id"`
+	Name                  string     `json:"name"` // 可选任务名称;空=未命名
+	CategoryID            *int64     `json:"category_id,omitempty"`
+	CategoryName          string     `json:"category_name,omitempty"`
+	Pinned                bool       `json:"pinned"`
+	PinnedAt              *time.Time `json:"pinned_at,omitempty"`
+	Description           string     `json:"description"`
+	Goal                  string     `json:"goal"`
+	ExplorationID         int64      `json:"exploration_id"`
+	Status                string     `json:"status"`
+	Paused                bool       `json:"paused"`
+	Queued                bool       `json:"queued"`
+	QueuedAt              *time.Time `json:"queued_at,omitempty"`
+	QueueMode             string     `json:"queue_mode,omitempty"`
+	LLMProfileID          *int64     `json:"llm_profile_id,omitempty"`
 	// Task-level ordered LLM chain. LLMProfileID remains the compatibility alias
 	// for ActiveLLMProfileID while older API clients still send one profile id.
 	LLMProfileIDs      []int64    `json:"llm_profile_ids,omitempty"`
@@ -144,23 +147,32 @@ func (d *DB) CreateTask(description, goal string, llmProfileID *int64, timeoutSe
 // TaskCreateOptions contains the task data that must be committed atomically
 // with the task/exploration row.
 type TaskCreateOptions struct {
-	Name                 string // 可选任务名称;空=未命名
-	CategoryID           *int64
-	SourceTaskIDs        []int64
-	CompanyIDs           []int64
-	LLMProfileIDs        []int64
-	TimeoutSeconds       int
-	PlanHeartbeatSeconds int
+	AssetApprovalTemplate string
+	Name                  string // 可选任务名称;空=未命名
+	CategoryID            *int64
+	SourceTaskIDs         []int64
+	CompanyIDs            []int64
+	AssetIDs              []int64
+	LLMProfileIDs         []int64
+	TimeoutSeconds        int
+	PlanHeartbeatSeconds  int
 	// CoverageEnabled 是「资产覆盖度功能」开关;nil=默认开(true)，让不关心该开关的创建
 	// 路径(编排 spawn、老 API)沿用原行为。仅 web 创建任务时可显式传 false 关闭。
 	CoverageEnabled *bool
-	// InterceptRules 是任务级资产拦截规则,创建时随任务在同一事务内写入 task_intercept_rules。
-	InterceptRules []TaskInterceptRuleInput
+	// AllianceSnapshots 是建任务时冻结的联盟画像快照（fork-only）。为空表示
+	// 未选择联盟画像，任务行为与旧版本一致。
+	AllianceSnapshots []TaskAllianceSnapshot
 }
 
 // CreateTaskWithOptions creates an exploration, task, direct source relations,
 // and the ordered task LLM chain in one transaction.
 func (d *DB) CreateTaskWithOptions(description, goal string, opts TaskCreateOptions) (*Task, error) {
+	if opts.AssetApprovalTemplate == "" {
+		opts.AssetApprovalTemplate = "all_assets"
+	}
+	if !ValidAssetApprovalTemplate(opts.AssetApprovalTemplate) {
+		return nil, fmt.Errorf("%w: invalid asset_approval_template", ErrTaskAssetInvalid)
+	}
 	if len(opts.SourceTaskIDs) > MaxTaskSourceCount {
 		return nil, fmt.Errorf("too many source tasks: got %d, maximum is %d", len(opts.SourceTaskIDs), MaxTaskSourceCount)
 	}
@@ -169,6 +181,11 @@ func (d *DB) CreateTaskWithOptions(description, goal string, opts TaskCreateOpti
 		return nil, err
 	}
 	opts.CompanyIDs = companyIDs
+	assetIDs, err := NormalizeTaskAssetIDs(opts.AssetIDs)
+	if err != nil {
+		return nil, err
+	}
+	opts.AssetIDs = assetIDs
 	tx, err := d.Begin()
 	if err != nil {
 		return nil, err
@@ -216,7 +233,8 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		active = &id
 	}
 	t := &Task{
-		Name: opts.Name, CategoryID: opts.CategoryID, CategoryName: categoryName,
+		AssetApprovalTemplate: opts.AssetApprovalTemplate,
+		Name:                  opts.Name, CategoryID: opts.CategoryID, CategoryName: categoryName,
 		Description: description, Goal: goal, ExplorationID: expID,
 		LLMProfileID: active, ActiveLLMProfileID: active,
 		LLMProfileIDs:  append([]int64(nil), opts.LLMProfileIDs...),
@@ -224,11 +242,15 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		CompanyIDs:     append([]int64(nil), opts.CompanyIDs...),
 		TimeoutSeconds: opts.TimeoutSeconds, PlanHeartbeatSeconds: opts.PlanHeartbeatSeconds,
 		CoverageEnabled: coverageEnabled,
+		ExecutionMode:   ExecutionManaged,
 	}
 	if err := tx.QueryRow(`
-INSERT INTO tasks(name, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled)
-VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9)
-RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
+INSERT INTO tasks(name, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id,
+                  timeout_seconds, plan_heartbeat_seconds, coverage_enabled, asset_approval_template)
+VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10)
+RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, description, goal, expID, active,
+		opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, opts.AssetApprovalTemplate).
+		Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
 		return nil, err
 	}
 	if err := insertTaskRelations(tx, t.ID, opts.SourceTaskIDs); err != nil {
@@ -237,10 +259,16 @@ RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, descripti
 	if err := insertTaskCompanies(tx, t.ID, opts.CompanyIDs); err != nil {
 		return nil, err
 	}
+	if err := insertTaskAssets(tx, t.ID, opts.AssetIDs); err != nil {
+		return nil, err
+	}
+	if err := seedUserAssetGrants(tx, t.ID); err != nil {
+		return nil, err
+	}
 	if err := insertTaskLLMProfiles(tx, t.ID, opts.LLMProfileIDs); err != nil {
 		return nil, err
 	}
-	if err := insertTaskInterceptRules(tx, t.ID, opts.InterceptRules); err != nil {
+	if err := insertAllianceTaskSnapshotsTx(tx, t.ID, opts.AllianceSnapshots); err != nil {
 		return nil, err
 	}
 	if len(opts.LLMProfileIDs) == 0 {
@@ -249,6 +277,95 @@ RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, descripti
 		t.LLMFailoverState = "ready"
 	}
 	return t, tx.Commit()
+}
+
+// insertTaskAssets attaches the explicitly selected global assets during task
+// creation and derives conservative task scopes from their host identity. It
+// runs in the creation transaction so a missing asset cannot leave a partial
+// task behind.
+func insertTaskAssets(tx *sql.Tx, taskID int64, assetIDs []int64) error {
+	if len(assetIDs) == 0 {
+		return nil
+	}
+	var found int
+	if err := tx.QueryRow(`SELECT count(*) FROM assets WHERE id=ANY($1::bigint[])`, assetIDs).Scan(&found); err != nil {
+		return err
+	}
+	if found != len(assetIDs) {
+		return ErrTaskAssetAssetNotFound
+	}
+	if _, err := tx.Exec(`UPDATE assets SET task_ids=CASE
+WHEN $1=ANY(task_ids) THEN task_ids ELSE array_append(task_ids,$1) END
+WHERE id=ANY($2::bigint[])`, taskID, assetIDs); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO task_asset_links(task_id,asset_id,source,source_summary)
+SELECT $1,id,'direct','任务创建时直接选择'
+FROM assets WHERE id=ANY($2::bigint[])
+ON CONFLICT (task_id,asset_id) DO UPDATE
+SET source='direct', source_summary=EXCLUDED.source_summary, source_node_id=NULL,
+    approval_state='approved', approved_at=now(), approved_by='user', approval_reason='任务创建时直接选择'`, taskID, assetIDs); err != nil {
+		return err
+	}
+	rows, err := tx.Query(`SELECT id,type,COALESCE(domain,''),COALESCE(url,''),COALESCE(ip,'')
+FROM assets WHERE id=ANY($1::bigint[])`, assetIDs)
+	if err != nil {
+		return err
+	}
+	// database/sql cannot run another statement on this transaction's pgx
+	// connection while rows is still streaming. Materialize the conservative
+	// scopes first, close the result set, and only then perform the upserts.
+	var scopes []TaskScope
+	for rows.Next() {
+		var id int64
+		var typ, domain, rawURL, ip string
+		if err := rows.Scan(&id, &typ, &domain, &rawURL, &ip); err != nil {
+			rows.Close()
+			return err
+		}
+		var scope TaskScope
+		scope.TaskID, scope.Source, scope.Reason = taskID, "manual", "任务创建时直接选择资产"
+		switch typ {
+		case "root_domain":
+			scope.Kind, scope.Domain = "root_domain", DomainKey(domain)
+		case "subdomain":
+			scope.Kind, scope.Domain = "subdomain", DomainKey(domain)
+		case "ip":
+			scope.Kind, scope.Net = "ip", ipToHostCIDR(ip)
+		case "service", "endpoint":
+			host := DomainKey(domain)
+			if host == "" && rawURL != "" {
+				host, _, _ = parseURL(normalizeURL(rawURL))
+			}
+			if host != "" && net.ParseIP(host) == nil {
+				scope.Kind, scope.Domain = "subdomain", host
+			} else if c := ipToHostCIDR(host); c != "" {
+				scope.Kind, scope.Net = "ip", c
+			} else if c := ipToHostCIDR(ip); c != "" {
+				scope.Kind, scope.Net = "ip", c
+			}
+		}
+		if scope.Kind != "" {
+			scopes = append(scopes, scope)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	scoped := &AssetStore{tx: tx}
+	if err := scoped.ensureManualDerivedParents(taskID, assetIDs); err != nil {
+		return err
+	}
+	for _, scope := range scopes {
+		if _, err := scoped.upsertTaskScopeResult(scope); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func insertTaskCompanies(tx *sql.Tx, taskID int64, companyIDs []int64) error {
@@ -280,6 +397,9 @@ SELECT count(*) FROM inserted`, taskID, companyIDs).Scan(&inserted)
 	if inserted != len(companyIDs) {
 		return fmt.Errorf("%w: one or more companies do not exist", ErrTaskCompanyNotFound)
 	}
+	if err := seedTaskCompanyAssets(tx, taskID, companyIDs); err != nil {
+		return err
+	}
 
 	// Updating task_ids fires sync_task_asset_links, which first creates generic
 	// source rows. The provenance upsert must therefore run afterwards so the
@@ -294,8 +414,9 @@ WHERE company_id=ANY($2::bigint[])`, taskID, companyIDs); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
-INSERT INTO task_asset_links(task_id, asset_id, source, source_summary)
-SELECT $1, asset.id, $3, '任务创建时关联企业：' || company.name
+INSERT INTO task_asset_links(task_id, asset_id, source, source_summary, approval_state, approved_at, approved_by, approval_reason)
+SELECT $1, asset.id, $3, '任务创建时关联企业：' || company.name,
+       'approved', now(), 'user', '用户提供：任务创建时关联企业'
 FROM assets asset
 JOIN companies company ON company.id=asset.company_id
 WHERE asset.company_id=ANY($2::bigint[])
@@ -303,10 +424,31 @@ WHERE asset.company_id=ANY($2::bigint[])
 ON CONFLICT (task_id, asset_id) DO UPDATE
 SET source=EXCLUDED.source,
     source_summary=EXCLUDED.source_summary,
-    source_node_id=NULL`, taskID, companyIDs, taskCompanyAssetSource); err != nil {
+    source_node_id=NULL,
+    approval_state='approved', approved_at=now(), approved_by='user', approval_reason='任务创建时关联企业'`, taskID, companyIDs, taskCompanyAssetSource); err != nil {
 		return err
 	}
-	return nil
+	rows, err := tx.Query(`SELECT id FROM assets WHERE company_id=ANY($1::bigint[])`, companyIDs)
+	if err != nil {
+		return err
+	}
+	var assetIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		assetIDs = append(assetIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	return (&AssetStore{tx: tx}).ensureManualDerivedParents(taskID, assetIDs)
 }
 
 func insertTaskRelations(tx *sql.Tx, taskID int64, sourceIDs []int64) error {
@@ -344,11 +486,11 @@ func insertTaskLLMProfiles(tx *sql.Tx, taskID int64, profileIDs []int64) error {
 
 const taskCols = `id, COALESCE(name,''), category_id,
 COALESCE((SELECT category.name FROM task_categories category WHERE category.id=tasks.category_id),''),
-description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at`
+description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at, asset_approval_template, execution_mode`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
-	if err := sc.Scan(&t.ID, &t.Name, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt); err != nil {
+	if err := sc.Scan(&t.ID, &t.Name, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &t.AssetApprovalTemplate, &t.ExecutionMode); err != nil {
 		return nil, err
 	}
 	t.Pinned = t.PinnedAt != nil

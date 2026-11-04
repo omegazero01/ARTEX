@@ -6,12 +6,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/traffic"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/traffic"
 )
 
 // DTO/serialization layer: each handler emits EXACTLY the frontend's spec shapes
-// (artex/web/src/lib/types.ts). These reshape db package structs so the
+// (series/web/src/lib/types.ts). These reshape db package structs so the
 // internal DB model never leaks over the API. The db structs and the frontend are
 // the canonical contracts; this file maps one onto the other.
 
@@ -30,40 +30,42 @@ func rawString(raw json.RawMessage) string {
 
 // ---- Task (frontend "Task") ---- created_at as RFC3339, plus a derived status.
 type TaskDTO struct {
-	ID                 string             `json:"id"`
-	ExplorationID      int64              `json:"exploration_id"`
-	Name               string             `json:"name"` // 可选任务名称;空=未命名
-	CategoryID         *int64             `json:"category_id,omitempty"`
-	CategoryName       string             `json:"category_name,omitempty"`
-	Pinned             bool               `json:"pinned"`
-	PinnedAt           string             `json:"pinned_at,omitempty"`
-	Description        string             `json:"description"`
-	Goal               string             `json:"goal"`
-	Status             string             `json:"status"` // created | running | paused | done | failed
-	CreatedAt          string             `json:"created_at"`
-	CreatedUnix        int64              `json:"created_unix"`       // created_at as unix seconds (for run-duration calc)
-	CompletedAt        string             `json:"completed_at"`       // RFC3339 finish time (done/failed); "" if unfinished
-	CompletedUnix      int64              `json:"completed_unix"`     // completed_at as unix seconds (0 if unfinished)
-	LastActivity       int64              `json:"last_activity_unix"` // unix seconds of the last activity (0 if none)
-	Paused             bool               `json:"paused"`
-	Queued             bool               `json:"queued"`
-	Tokens             TokenTotalDTO      `json:"tokens"` // whole-task token consumption
-	GoalsTotal         int                `json:"goals_total"`
-	GoalsMet           int                `json:"goals_met"`
-	InFlight           int                `json:"in_flight"`                // 运行中 Worker 数（state=running 的意图）
-	Findings           FindingSeverityDTO `json:"findings"`                 // 该任务已登记的漏洞数（findings 表，按严重度分档）
-	LLMProfileID       *int64             `json:"llm_profile_id,omitempty"` // LLM profile used for this task; nil = default
-	LLMProfileIDs      []int64            `json:"llm_profile_ids"`
-	ActiveLLMProfileID *int64             `json:"active_llm_profile_id,omitempty"`
-	LLMFailoverState   string             `json:"llm_failover_state"`
-	LLMFailoverReason  string             `json:"llm_failover_reason,omitempty"`
-	SourceTaskIDs      []string           `json:"source_task_ids"`
-	ArchiveBlockedBy   string             `json:"archive_blocked_by_task_id,omitempty"`
-	CompanyIDs         []int64            `json:"company_ids"`
-	CoverageEnabled    bool               `json:"coverage_enabled"` // 资产覆盖度功能开关(创建时定)
+	Findings              FindingSeverityDTO `json:"findings"`
+	ExecutionMode         string             `json:"execution_mode"`
+	ID                    string             `json:"id"`
+	ExplorationID         int64              `json:"exploration_id"`
+	Name                  string             `json:"name"` // 可选任务名称;空=未命名
+	CategoryID            *int64             `json:"category_id,omitempty"`
+	CategoryName          string             `json:"category_name,omitempty"`
+	Pinned                bool               `json:"pinned"`
+	PinnedAt              string             `json:"pinned_at,omitempty"`
+	Description           string             `json:"description"`
+	Goal                  string             `json:"goal"`
+	Status                string             `json:"status"` // created | running | paused | done | failed
+	CreatedAt             string             `json:"created_at"`
+	CreatedUnix           int64              `json:"created_unix"`       // created_at as unix seconds (for run-duration calc)
+	CompletedAt           string             `json:"completed_at"`       // RFC3339 finish time (done/failed); "" if unfinished
+	CompletedUnix         int64              `json:"completed_unix"`     // completed_at as unix seconds (0 if unfinished)
+	LastActivity          int64              `json:"last_activity_unix"` // unix seconds of the last activity (0 if none)
+	Paused                bool               `json:"paused"`
+	Queued                bool               `json:"queued"`
+	Tokens                TokenTotalDTO      `json:"tokens"` // whole-task token consumption
+	GoalsTotal            int                `json:"goals_total"`
+	GoalsMet              int                `json:"goals_met"`
+	InFlight              int                `json:"in_flight"`                // 运行中 Worker 数（state=running 的意图）
+	LLMProfileID          *int64             `json:"llm_profile_id,omitempty"` // LLM profile used for this task; nil = default
+	LLMProfileIDs         []int64            `json:"llm_profile_ids"`
+	ActiveLLMProfileID    *int64             `json:"active_llm_profile_id,omitempty"`
+	LLMFailoverState      string             `json:"llm_failover_state"`
+	LLMFailoverReason     string             `json:"llm_failover_reason,omitempty"`
+	SourceTaskIDs         []string           `json:"source_task_ids"`
+	ArchiveBlockedBy      string             `json:"archive_blocked_by_task_id,omitempty"`
+	CompanyIDs            []int64            `json:"company_ids"`
+	CoverageEnabled       bool               `json:"coverage_enabled"` // 资产覆盖度功能开关(创建时定)
+	AssetApprovalTemplate string             `json:"asset_approval_template"`
 }
 
-// FindingSeverityDTO 是任务列表里按严重度分档的漏洞计数（严重/高/中/低）。
+// FindingSeverityDTO contains registered findings by severity for the task list.
 type FindingSeverityDTO struct {
 	Critical int `json:"critical"`
 	High     int `json:"high"`
@@ -110,30 +112,32 @@ func taskDTO(t *Task, status string) TaskDTO {
 	}
 	profileIDs := append(make([]int64, 0, len(llmState.ProfileIDs)), llmState.ProfileIDs...)
 	return TaskDTO{
-		ID:                 t.ID,
-		ExplorationID:      t.ExpID,
-		Name:               lifecycle.Name,
-		CategoryID:         lifecycle.CategoryID,
-		CategoryName:       lifecycle.CategoryName,
-		Pinned:             lifecycle.PinnedAt > 0,
-		PinnedAt:           completedRFC(lifecycle.PinnedAt),
-		Description:        t.Description,
-		Goal:               t.Goal,
-		Status:             status,
-		CreatedAt:          rfc3339(time.Unix(t.CreatedAt, 0)),
-		CreatedUnix:        t.CreatedAt,
-		CompletedAt:        completedRFC(lifecycle.CompletedAt),
-		CompletedUnix:      lifecycle.CompletedAt,
-		Paused:             lifecycle.Paused,
-		Queued:             lifecycle.Queued,
-		LLMProfileID:       llmState.ProfileID,
-		LLMProfileIDs:      profileIDs,
-		ActiveLLMProfileID: llmState.ActiveID,
-		LLMFailoverState:   llmState.FailoverState,
-		LLMFailoverReason:  llmState.FailoverReason,
-		SourceTaskIDs:      sourceIDs,
-		CompanyIDs:         lifecycle.CompanyIDs,
-		CoverageEnabled:    t.CoverageEnabled,
+		ID:                    t.ID,
+		ExplorationID:         t.ExpID,
+		Name:                  lifecycle.Name,
+		CategoryID:            lifecycle.CategoryID,
+		CategoryName:          lifecycle.CategoryName,
+		Pinned:                lifecycle.PinnedAt > 0,
+		PinnedAt:              completedRFC(lifecycle.PinnedAt),
+		Description:           t.Description,
+		Goal:                  t.Goal,
+		Status:                status,
+		CreatedAt:             rfc3339(time.Unix(t.CreatedAt, 0)),
+		CreatedUnix:           t.CreatedAt,
+		CompletedAt:           completedRFC(lifecycle.CompletedAt),
+		CompletedUnix:         lifecycle.CompletedAt,
+		Paused:                lifecycle.Paused,
+		Queued:                lifecycle.Queued,
+		LLMProfileID:          llmState.ProfileID,
+		LLMProfileIDs:         profileIDs,
+		ActiveLLMProfileID:    llmState.ActiveID,
+		LLMFailoverState:      llmState.FailoverState,
+		LLMFailoverReason:     llmState.FailoverReason,
+		SourceTaskIDs:         sourceIDs,
+		CompanyIDs:            lifecycle.CompanyIDs,
+		CoverageEnabled:       t.CoverageEnabled,
+		AssetApprovalTemplate: lifecycle.AssetApprovalTemplate,
+		ExecutionMode:         lifecycle.ExecutionMode,
 	}
 }
 
@@ -186,19 +190,17 @@ type TaskNodeDTO struct {
 	TS           string `json:"ts"`
 	SourceTaskID string `json:"source_task_id,omitempty"`
 	Inherited    bool   `json:"inherited,omitempty"`
-	DeleteReason string `json:"delete_reason,omitempty"` // 意图假删除(state='deleted')时的删除原因
 }
 
 func taskNodeDTO(n *db.Node) TaskNodeDTO {
 	d := TaskNodeDTO{
-		ID:           i64s(n.ID),
-		Type:         n.Kind,
-		Payload:      rawString(n.Payload),
-		DeleteReason: n.DeleteReason,
-		Priority:     n.Priority,
-		State:        n.State,
-		Origin:       n.Origin,
-		TS:           rfc3339(n.CreatedAt),
+		ID:       i64s(n.ID),
+		Type:     n.Kind,
+		Payload:  rawString(n.Payload),
+		Priority: n.Priority,
+		State:    n.State,
+		Origin:   n.Origin,
+		TS:       rfc3339(n.CreatedAt),
 	}
 	if n.SourceTaskID > 0 {
 		d.SourceTaskID = i64s(n.SourceTaskID)
@@ -303,21 +305,24 @@ func coverageAssetRefDTO(ref db.AssetRef) CoverageAssetRefDTO {
 // ---- Finding (frontend "Finding") ----
 
 type FindingDTO struct {
+	Reproduction json.RawMessage `json:"reproduction,omitempty"`
+
 	TrafficCount          int                        `json:"traffic_count"`
 	EvidenceVersion       int64                      `json:"evidence_version"`
 	ReportEvidenceVersion int64                      `json:"report_evidence_version"`
 	ReportStale           bool                       `json:"report_stale"`
 	TrafficBindings       []db.FindingTrafficBinding `json:"traffic_bindings,omitempty"`
 
-	ID        string `json:"id"`
-	FindingID string `json:"finding_id,omitempty"` // standalone findings-table id — the handle for status updates
-	VulnClass string `json:"vulnclass"`
-	Name      string `json:"name,omitempty"` // 漏洞名称;为空时前端回退展示 vulnclass
-	Severity  string `json:"severity"`       // critical | high | medium | low
-	Status    string `json:"status"`         // pending | in_progress | confirmed | resolved | fixed | false_positive | ignored | duplicate | risk_accepted
-	Summary   string `json:"summary"`
-	Evidence  string `json:"evidence"`
-	Report    string `json:"report,omitempty"` // 详细报告(Markdown);仅详情接口返回,列表为空
+	ID           string `json:"id"`
+	FindingID    string `json:"finding_id,omitempty"` // standalone findings-table id — the handle for status updates
+	VulnClass    string `json:"vulnclass"`
+	Name         string `json:"name,omitempty"` // 漏洞名称;为空时前端回退展示 vulnclass
+	Severity     string `json:"severity"`       // critical | high | medium | low
+	Status       string `json:"status"`         // pending | in_progress | confirmed | resolved | fixed | false_positive | ignored | duplicate | risk_accepted
+	Summary      string `json:"summary"`
+	Evidence     string `json:"evidence"`
+	Report       string `json:"report,omitempty"`        // 人类提交版(Markdown);仅详情接口返回,列表为空
+	ReportDetail string `json:"report_detail,omitempty"` // 完整技术明细(Markdown);仅详情接口返回,不导出
 
 	IntentID        string            `json:"intent_id,omitempty"`
 	ParamID         string            `json:"param_id,omitempty"`
@@ -444,18 +449,20 @@ func findingFromDB(f *db.DBFinding, assets map[int64]*db.Asset) FindingDTO {
 		status = db.FindingPending
 	}
 	d := FindingDTO{
+		Reproduction: f.Reproduction,
 		ID:           i64s(f.ID),
 		FindingID:    i64s(f.ID),
 		TrafficCount: f.TrafficCount, EvidenceVersion: f.EvidenceVersion, ReportEvidenceVersion: f.ReportEvidenceVersion,
 		ReportStale: f.Report != "" && f.EvidenceVersion != f.ReportEvidenceVersion, TrafficBindings: f.TrafficBindings,
-		VulnClass: f.VulnClass,
-		Name:      f.Name,
-		Severity:  f.Severity,
-		Status:    status,
-		Summary:   f.Summary,
-		Evidence:  f.Evidence,
-		Report:    f.Report,
-		TS:        rfc3339(f.CreatedAt),
+		VulnClass:    f.VulnClass,
+		Name:         f.Name,
+		Severity:     f.Severity,
+		Status:       status,
+		Summary:      f.Summary,
+		Evidence:     f.Evidence,
+		Report:       f.Report,
+		ReportDetail: f.ReportDetail,
+		TS:           rfc3339(f.CreatedAt),
 	}
 	d.Assets = findingAssetDTOs(f.AssetIDs, assets)
 	if f.TaskID != nil {

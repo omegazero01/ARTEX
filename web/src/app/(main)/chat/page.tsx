@@ -22,10 +22,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ApprovalExecutionFocus, useApprovalFocus, useApprovalHistory } from "@/components/approval-execution-focus";
 import { MentionTextarea } from "@/components/mention-textarea";
+import { SessionToolCalls } from "@/components/session-tool-calls";
 import { SideQuestionButton, SideQuestionWorkspace } from "@/components/side-question-workspace";
 import { TodoPopover } from "@/components/todo-popover";
-import { ApprovalExecutionFocus, useApprovalFocus, useApprovalHistory } from "@/components/approval-execution-focus";
 import { Transcript } from "@/components/transcript";
 import {
   AlertDialog,
@@ -58,6 +59,7 @@ import { api } from "@/lib/api";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { isBtwCommand } from "@/lib/side-questions";
+import { toolCallRevision } from "@/lib/tool-calls";
 import type { Activity, Agent, ChatAttachment, Conversation, LLMProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -94,7 +96,7 @@ const CONVERSATION_LIST_PAGE = 100;
 // Which agent groups the user has collapsed in the left rail. Persisted so the
 // rail looks the same after a reload; unknown keys are harmless (a deleted agent
 // simply never renders a group again).
-const COLLAPSED_AGENTS_KEY = "artex.chat.collapsed-agents";
+const COLLAPSED_AGENTS_KEY = "series.chat.collapsed-agents";
 
 function conversationIsPinned(conversation: Conversation): boolean {
   return conversation.pinned ?? Boolean(conversation.pinned_at);
@@ -186,7 +188,7 @@ function Composer({
     onSend();
   }
   return (
-    <div className="border-t p-3">
+    <div className="mx-auto w-full max-w-[960px] p-4">
       {atts.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5">
           {atts.map((a) => (
@@ -212,7 +214,7 @@ function Composer({
           ))}
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 rounded-3xl border bg-muted/30 p-3">
         {leftSlot ? <div className="w-full sm:w-auto">{leftSlot}</div> : null}
         {onPickFiles && (
           <>
@@ -241,7 +243,7 @@ function Composer({
           </>
         )}
         <MentionTextarea
-          className="max-h-40 min-h-10 min-w-0 flex-1 resize-none"
+          className="max-h-40 min-h-10 min-w-0 flex-1 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
           rows={1}
           placeholder={placeholder}
           value={value}
@@ -607,14 +609,23 @@ function ChatView({
     };
   }, [running, conv.id, onTitleMaybeChanged]);
 
-  const loadFocusPage = React.useCallback((before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE), [conv.id]);
+  const loadFocusPage = React.useCallback(
+    (before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE),
+    [conv.id],
+  );
   const mergeFocusPage = React.useCallback((page: { items: Activity[]; hasMore: boolean }) => {
     setMessages((prev) => mergeActivities(page.items, prev));
     earliestRef.current = page.items[0]?.seq ?? earliestRef.current;
     hasMoreRef.current = page.hasMore;
     setHasMore(page.hasMore);
   }, []);
-  const focusHistory = useApprovalHistory(approvalFocus.state?.source, historyLoaded, messages, loadFocusPage, mergeFocusPage);
+  const focusHistory = useApprovalHistory(
+    approvalFocus.state?.source,
+    historyLoaded,
+    messages,
+    loadFocusPage,
+    mergeFocusPage,
+  );
 
   // ---- transcript auto-scroll (open → bottom; stick to bottom unless scrolled up) ----
   const contentRef = React.useRef<HTMLDivElement | null>(null);
@@ -793,22 +804,34 @@ function ChatView({
       <ApprovalExecutionFocus focus={approvalFocus} history={focusHistory} />
 
       {/* messages */}
-      <ScrollArea type="auto" className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
-        <div className="min-w-0 max-w-full px-4 py-3" ref={contentRef}>
-          {messages.length === 0 && !running ? (
-            <div className="text-muted-foreground py-10 text-center text-sm">
-              开始和「{agent?.name ?? conv.agent_key}」对话
-            </div>
-          ) : (
-            <>
-              {hasMore && (
-                <div className="text-muted-foreground/70 pb-2 text-center text-[11px]">向上滚动加载更早的消息…</div>
-              )}
-              <Transcript activity={messages} live={running} chat fetchDetail={fetchDetail} focusedSeq={focusHistory.ready ? approvalFocus.state?.source?.seq : undefined} />
-            </>
-          )}
-        </div>
-      </ScrollArea>
+      <SessionToolCalls
+        key={`${conv.id}:${approvalFocus.state?.id ?? "latest"}`}
+        base={`/conversations/${conv.id}/tool-calls`}
+        revision={toolCallRevision(messages, running)}
+      >
+        <ScrollArea type="auto" className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
+          <div className="min-w-0 max-w-full px-4 py-3" ref={contentRef}>
+            {messages.length === 0 && !running ? (
+              <div className="text-muted-foreground py-10 text-center text-sm">
+                开始和「{agent?.name ?? conv.agent_key}」对话
+              </div>
+            ) : (
+              <>
+                {hasMore && (
+                  <div className="text-muted-foreground/70 pb-2 text-center text-[11px]">向上滚动加载更早的消息…</div>
+                )}
+                <Transcript
+                  activity={messages}
+                  live={running}
+                  chat
+                  fetchDetail={fetchDetail}
+                  focusedSeq={focusHistory.ready ? approvalFocus.state?.source?.seq : undefined}
+                />
+              </>
+            )}
+          </div>
+        </ScrollArea>
+      </SessionToolCalls>
 
       <Composer
         value={input}
@@ -1050,15 +1073,18 @@ export default function ChatPage() {
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
   const [sourceRequested, setSourceRequested] = React.useState(false);
   const [convsLoaded, setConvsLoaded] = React.useState(false);
-  const selectConversation = React.useCallback((id: number | null) => {
-    if (id !== selectedId) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("approval");
-      setSourceRequested(false);
-      window.history.replaceState(null, "", url);
-    }
-    setSelectedId(id);
-  }, [selectedId]);
+  const selectConversation = React.useCallback(
+    (id: number | null) => {
+      if (id !== selectedId) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("approval");
+        setSourceRequested(false);
+        window.history.replaceState(null, "", url);
+      }
+      setSelectedId(id);
+    },
+    [selectedId],
+  );
 
   const [renamingId, setRenamingId] = React.useState<number | null>(null);
   const [renameText, setRenameText] = React.useState("");
@@ -1085,7 +1111,10 @@ export default function ChatPage() {
     const seq = ++conversationListSeq.current;
     try {
       const items = await api.conversations();
-      if (seq === conversationListSeq.current) { setConvs(items); setConvsLoaded(true); }
+      if (seq === conversationListSeq.current) {
+        setConvs(items);
+        setConvsLoaded(true);
+      }
     } catch {
       // Preserve the selected transcript and list on a transient poll failure.
     }
@@ -1348,11 +1377,11 @@ export default function ChatPage() {
   return (
     <div
       data-content-padding="false"
-      className="flex h-[calc(100svh-3rem)] min-w-0 flex-col overflow-hidden p-3 sm:p-4 md:h-[calc(100svh-4rem)] md:p-6"
+      className="flex h-[calc(100svh-3rem)] min-w-0 flex-col overflow-hidden p-3 sm:p-4 md:h-dvh md:p-6"
     >
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 grid-rows-[minmax(10rem,15rem)_minmax(0,1fr)] gap-3 md:grid-cols-[18rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:gap-4">
         {/* left: conversation list */}
-        <div className="bg-card flex flex-col overflow-hidden rounded-lg border">
+        <div className="bg-card flex flex-col overflow-hidden rounded-xl border">
           <div className="flex flex-col gap-2 border-b p-2">
             <Button size="sm" className="w-full" onClick={() => selectConversation(null)}>
               <PlusIcon /> 新建对话
@@ -1504,7 +1533,7 @@ export default function ChatPage() {
         </div>
 
         {/* right: chat view */}
-        <div className="bg-card flex min-w-0 flex-col overflow-hidden rounded-lg border">
+        <div className="bg-card flex min-w-0 flex-col overflow-hidden rounded-xl border">
           {selected ? (
             <ChatView
               key={selected.id}

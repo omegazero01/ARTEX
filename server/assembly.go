@@ -3,30 +3,41 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"fmt"
 	"log"
 	"path/filepath"
+	"runtime"
 	"strings"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/skill"
 	actool "github.com/Autumn-27/norma/tool"
+	"github.com/Autumn-27/norma/transcript"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/traffic"
 )
 
 // wireAgentAugment connects the PG agent_visibility table into the agent runtime:
 // an agent's visible skills are loaded from the filesystem and packed into one
-// Skill meta-tool; its visible stdio MCP servers are spawned and expanded to
+// Skill meta-tool; its visible MCP tools use cached metadata and run-local lazy
+// connections, and are expanded to
 // mcp__server__tool. skillDir is the root directory of all skill subdirectories.
 // hostTools, if set, returns runtime host tools (currently the traffic tools when
 // capture is on) to add to EVERY agent's base list — the DB tools table then
 // filters them per-agent binding. Empty/nil → no host tools this run (capture off).
 func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.CoreTool, map[string][]string)) {
+	metadataCache := &mcpRuntimeCache{}
 	agent.ToolAugment = func(ctx context.Context, agentKey string) ([]actool.CoreTool, agent.DeferredInfo, func()) {
 		a, err := pg.GetAgentByKey(agentKey)
 		if err != nil || a == nil {
 			return nil, agent.DeferredInfo{}, nil
+		}
+		runInfo := agent.RunInfoFrom(ctx)
+		// Task runs carry explicit attribution in RunInfo; conversational runs
+		// additionally carry the transcript session id in norma's context.
+		// Preserve both so MCP recent-call history can identify either dimension.
+		if runInfo.SessionID == "" {
+			runInfo.SessionID = transcript.SessionIDFrom(ctx)
 		}
 		var extra []actool.CoreTool
 
@@ -62,11 +73,11 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 			}
 		}
 
-		// --- mcp: connect enabled servers that are directly visible to this agent
+		// --- mcp: assemble enabled servers that are directly visible to this agent
 		// OR skill-gated (named in a visible skill's mcps field). Directly-visible
 		// and NOT gated → global (unlocked from session start). Skill-gated →
 		// deferred until that skill is invoked (regardless of direct visibility).
-		var closers []io.Closer
+		var closers []func()
 		serverTools := map[string][]string{} // server name → its tool names
 		var allNames, globalNames []string
 		globalSet := map[string]bool{}
@@ -83,19 +94,14 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 				if !directVisible && !skillGated {
 					continue // neither directly visible nor referenced by a visible skill
 				}
-				cl, err := connectMCP(ctx, m)
+				ts, closeRun, err := metadataCache.prepare(ctx, m, connectMCP)
 				if err != nil {
-					log.Printf("[mcp] %s 连接失败: %v", m.Name, err)
+					log.Printf("[mcp] %s 工具装配失败: %v", m.Name, err)
 					continue
 				}
-				closers = append(closers, cl)
-				ts, err := cl.Tools(ctx)
-				if err != nil {
-					log.Printf("[mcp] %s tools/list 失败: %v", m.Name, err)
-					continue
-				}
+				closers = append(closers, closeRun)
 				for _, t := range ts {
-					extra = append(extra, t)
+					extra = append(extra, meterMCPTool(t, pg, m.ID, m.Name, a.Key, runInfo))
 					allNames = append(allNames, t.Name())
 					serverTools[m.Name] = append(serverTools[m.Name], t.Name())
 					if directVisible && !skillGated {
@@ -141,7 +147,7 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 			// so the run's task/session ids ride in on the ctx (agent.RunInfo). Read it
 			// once here — this closure is rebuilt per run, so the captured value always
 			// belongs to this run.
-			extra = append(extra, meterSkillTool(reg.Tool(), pg, reg, a.Key, agent.RunInfoFrom(ctx)))
+			extra = append(extra, meterSkillTool(reg.Tool(), pg, reg, a.Key, runInfo))
 		}
 
 		// host tools (traffic / orchestration / custom) — added to every agent's base;
@@ -166,7 +172,7 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 
 		cleanup := func() {
 			for _, c := range closers {
-				_ = c.Close()
+				c()
 			}
 		}
 		def := agent.DeferredInfo{
@@ -209,7 +215,11 @@ func seedPrompts(pg *db.DB) {
 // tool-assembly time each built-in tool is filtered by its agent binding / enabled
 // flag and, if kept, wrapped so the model sees the DB-overridden description/schema
 // and缺省入参 get injected. MCP/skill/host tools have no row and pass through.
-func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
+func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool, configRoot ...string) {
+	root := ""
+	if len(configRoot) > 0 {
+		root = configRoot[0]
+	}
 	agent.FindingTrafficBindingEnabled = func() bool { return pg.GetBool(settingAgentTrafficBinding, false) }
 	// Seed the built-in domain tools (first-insert only; DO NOTHING preserves edits).
 	// No startup prune: rows we didn't seed are left alone so future user-defined
@@ -236,26 +246,41 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	// interactive_shell is on, so Bash points at shell_open for interactive programs
 	// without ever referencing a tool that isn't injected (§14.1/§14.2).
 	const bashInteractiveShellNote = "\n\n需要【交互输入】的程序（msfconsole / ssh 交互登录 / mysql、psql、python 等 REPL / 密码或 yes/no 提示 / nc 反弹 shell）不要用 Bash（它没有 stdin、会卡住），改用 shell_open 开交互会话（用完 shell_close）。一次性、非交互命令仍用 Bash。"
-	agent.ToolResolve = func(ctx context.Context, agentKey string, tools []actool.CoreTool) []actool.CoreTool {
+	agent.ToolResolve = func(ctx context.Context, agentKey string, tools []actool.CoreTool) ([]actool.CoreTool, error) {
 		rows, err := pg.ListTools()
 		if err != nil {
-			log.Printf("[tools] 读取工具表失败，按代码默认放行: %v", err)
-			return tools
+			return nil, fmt.Errorf("加载工具授权配置失败，已停止本次工具装配: %w", err)
 		}
 		byKey := make(map[string]*db.Tool, len(rows))
 		for _, t := range rows {
 			byKey[t.Key] = t
 		}
+		policy, err := loadContextAccess(pg, agentKey)
+		if err != nil {
+			return nil, fmt.Errorf("加载读取能力失败: %w", err)
+		}
+		searchRow := byKey["context_search"]
+		agent.SetTaskContextReadAccess(ctx, policy, searchRow != nil && searchRow.System && searchRow.Enabled && contains(searchRow.Agents, agentKey))
 		runInfo := agent.RunInfoFrom(ctx)
 		resolve := func(t actool.CoreTool, row *db.Tool) actool.CoreTool {
 			var schema map[string]any
 			if len(row.Schema) > 0 {
 				_ = json.Unmarshal(row.Schema, &schema)
 			}
+			if row.System {
+				return applyContextPolicy(meterTool(agent.ResolveBuiltinTool(t, row.Description, schema), pg, row.Key, agentKey, runInfo), policy)
+			}
 			return meterTool(agent.DecorateTool(t, row.Description, schema), pg, row.Key, agentKey, runInfo)
 		}
 		out := tools[:0:0]
+		taskReg := agent.TaskDomainToolsFrom(ctx)
 		for _, t := range tools {
+			switch t.Name() {
+			case "context_search", "context_get", "graph_overview":
+				if scoped := taskReg[t.Name()]; scoped != nil {
+					t = scoped
+				}
+			}
 			row, known := byKey[t.Name()]
 			if !known { // MCP/skill/host tool: no row → untouched
 				out = append(out, t)
@@ -271,7 +296,14 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 		// and therefore never includes ToolSet-backed domain tools. Per-task instances
 		// in the base always win: inList is built from the original incoming list so a
 		// worker's own upsert_asset is never shadowed by the server-level registry copy.
-		if len(domainReg) > 0 {
+		injectionReg := domainReg
+		if taskReg := agent.TaskDomainToolsFrom(ctx); taskReg != nil {
+			injectionReg = taskReg
+		} else if runInfo.TaskID > 0 || runInfo.ExplorationID > 0 {
+			// Never silently replace a missing task scope with global asset access.
+			injectionReg = nil
+		}
+		if len(injectionReg) > 0 {
 			inList := make(map[string]bool, len(tools))
 			for _, t := range tools {
 				inList[t.Name()] = true
@@ -280,27 +312,41 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 				if row.Kind == "shell" || !row.Enabled || !contains(row.Agents, agentKey) || inList[row.Key] {
 					continue
 				}
-				inst, ok := domainReg[row.Key]
+				inst, ok := injectionReg[row.Key]
 				if !ok {
 					continue // not a domain tool; custom/host tools are injected via hostTools()
 				}
 				out = append(out, resolve(inst, row))
 			}
 		}
-		// shell hints: user-defined kind="shell" tools are not callable — they are
-		// environment declarations that tell the model which command-line tools are
-		// installed. Collect the ones bound to this agent and append to Bash's description.
-		var shellHints []string
-		for _, row := range rows {
-			if row.Kind == "shell" && row.Enabled && contains(row.Agents, agentKey) {
-				shellHints = append(shellHints, "- "+row.Key+": "+row.Description)
+		for i, tool := range out {
+			if tool.Name() == "Bash" {
+				if _, known := byKey["Bash"]; !known {
+					tool = meterTool(tool, pg, "Bash", agentKey, runInfo)
+				}
+				out[i] = &shellMeteredTool{CoreTool: tool, recorder: pg, declarations: rows, agentKey: agentKey, ri: runInfo, configRoot: root}
 			}
 		}
-		if len(shellHints) > 0 {
-			note := "\n\n以下工具已安装在此 bash 环境中，可直接通过 Bash 调用：\n" + strings.Join(shellHints, "\n")
+		// Bash description addenda: the host execution-environment note is always
+		// attached (on Windows it explains that commands actually run through
+		// PowerShell); user-defined kind="shell" declarations are appended when
+		// present.
+		if note := agent.HostEnvironmentNote() + agent.HostLessonNote() + shellToolNote(rows, agentKey); note != "" {
 			for i, t := range out {
 				if t.Name() == "Bash" {
 					out[i] = agent.DecorateTool(t, t.Description()+note, t.InputSchema())
+					break
+				}
+			}
+		}
+		// Bash extended prompt: the SDK prompt suggests && chaining and heredocs,
+		// which Windows PowerShell rejects, and it sits after the host note in the
+		// rendered description. Replace it where the host says so (see
+		// agent.BashPromptOverride); the note above carries the accurate guidance.
+		if prompt, ok := agent.BashPromptOverride(); ok {
+			for i, t := range out {
+				if t.Name() == "Bash" {
+					out[i] = agent.OverrideToolPrompt(t, prompt)
 					break
 				}
 			}
@@ -309,7 +355,7 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 		// web_search), NOT by tools-table binding. When on, inject the 5 shell_* tools
 		// and COUPLE the Bash description addendum so it points at shell_open — and never
 		// dangles when off. See docs/交互式shell设计.md §14.2.
-		if !actool.InteractiveShellDisabled() {
+		if runtime.GOOS != "windows" && !actool.InteractiveShellDisabled() {
 			if a, err := pg.GetAgentByKey(agentKey); err == nil && a != nil && a.InteractiveShell {
 				out = append(out, actool.ShellSessionTools()...)
 				for i, t := range out {
@@ -320,8 +366,48 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 				}
 			}
 		}
-		return out
+		return out, nil
 	}
+}
+
+func shellToolNote(rows []*db.Tool, agentKey string) string {
+	var hints []string
+	for _, row := range rows {
+		if row.Kind != "shell" || !row.Enabled || !contains(row.Agents, agentKey) {
+			continue
+		}
+		description := strings.ReplaceAll(strings.TrimSpace(row.Description), "\r\n", "\n")
+		lines := []string{"- " + row.Key}
+		if description != "" {
+			parts := strings.Split(description, "\n")
+			lines[0] += ": " + parts[0]
+			for _, part := range parts[1:] {
+				lines = append(lines, "  "+part)
+			}
+		}
+		lines = appendShellHintField(lines, "可执行命令", row.Executable)
+		lines = appendShellHintField(lines, "所在目录", row.Directory)
+		lines = appendShellHintField(lines, "用法帮助", row.UsageHelp)
+		lines = appendShellHintField(lines, "何时调用", row.WhenToUse)
+		hints = append(hints, strings.Join(lines, "\n"))
+	}
+	if len(hints) == 0 {
+		return ""
+	}
+	return "\n\n以下工具已安装在当前命令执行环境中，可直接通过 Bash 工具调用：\n" + strings.Join(hints, "\n")
+}
+
+func appendShellHintField(lines []string, label, value string) []string {
+	value = strings.ReplaceAll(strings.TrimSpace(value), "\r\n", "\n")
+	if value == "" {
+		return lines
+	}
+	parts := strings.Split(value, "\n")
+	lines = append(lines, "  "+label+"："+parts[0])
+	for _, part := range parts[1:] {
+		lines = append(lines, "    "+part)
+	}
+	return lines
 }
 
 func contains(ss []string, v string) bool {
@@ -351,7 +437,12 @@ func buildDomainReg(as *db.AssetStore) map[string]actool.CoreTool {
 	serverTS.SetAssetStore(as, as.Companies())
 	reg := make(map[string]actool.CoreTool)
 	for _, t := range serverTS.AllDomainTools() {
-		reg[t.Name()] = t
+		// Only these tools explicitly support standalone/global operation. Other
+		// domain tools close over an ExplorationStore and need a per-run ToolSet.
+		switch t.Name() {
+		case "asset_search", "asset_get", "list_companies", "insert_assets", "report_finding", "add_company_scope":
+			reg[t.Name()] = t
+		}
 	}
 	return reg
 }

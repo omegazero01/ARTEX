@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/norma/llm"
+	"github.com/neouks/series/db"
 )
 
 // TestCoreTaskLifecyclePG exercises the migrated core (tasks/exploration on PG)
@@ -24,7 +25,28 @@ func TestCoreTaskLifecyclePG(t *testing.T) {
 	}
 	defer m.Close()
 	td := t.TempDir()
-	s := New(context.Background(), m, td, td, td)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := New(ctx, m, td, td, td)
+	defer func() {
+		// New restores other admitted test tasks too. Drain all of this server's
+		// runtimes before its temporary transcript directory/database is removed.
+		cancel()
+		for _, task := range m.List() {
+			s.engine.StopTask(task.ID)
+		}
+		s.archiveWG.Wait()
+	}()
+	// This tests HTTP/PG lifecycle, not a real provider's retry latency. Keep
+	// goal decomposition deterministic and local even when another test seeded
+	// an active model profile. Empty decomposition exercises the real fallback.
+	s.cfgMu.Lock()
+	s.llmOn = true
+	s.llmCfg.Stream = false
+	s.llmProv = retestProvider{complete: func(context.Context, llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+		return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{llm.TextBlock("本次使用原始目标")}}, "end_turn", llm.Usage{}, nil
+	}}
+	s.cfgMu.Unlock()
 	h := s.Handler()
 	tok, err := signJWT(s.jwtKey)
 	if err != nil {
@@ -96,13 +118,16 @@ func TestCoreTaskLifecyclePG(t *testing.T) {
 
 	// The task detail header consumes the top-level engine mode while some clients
 	// read the active-task snapshot. Keep both representations in sync.
-	code, out = doRetry("GET", "/api/stats?task="+id, nil)
+	code, out = doRetry("GET", "/api/stats?task="+id+"&compact=1", nil)
 	if code != 200 {
 		t.Fatalf("task stats: %d (%v)", code, out)
 	}
 	activeTask, ok := out["active_task"].(map[string]any)
 	if !ok || activeTask["engine_mode"] != out["engine_mode"] {
 		t.Fatalf("engine mode mismatch: top=%v active_task=%v", out["engine_mode"], activeTask)
+	}
+	if _, exists := out["asset_counts"]; exists {
+		t.Fatal("task-scoped stats unexpectedly included global asset totals")
 	}
 
 	// delete → cascade removes the exploration subgraph and selected related data

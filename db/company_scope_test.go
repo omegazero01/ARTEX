@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -233,15 +234,7 @@ func TestCompanyICPAttribution(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	// 关连接必须走 t.Cleanup 且**注册在清理之前**：t.Cleanup 是后进先出，
-	// 先注册关闭 → 关闭最后执行，下面的数据清理才连得上库。
-	// 原先这里是 `defer d.Close()`：defer 在函数返回时先跑，t.Cleanup 在那之后
-	// 才执行，于是清理语句全落在**已关闭的连接**上、错误又被 `_, _ =` 丢弃，
-	// 资产与公司就永久残留在库里。残留本身不会立刻报错，但本用例用
-	// `MAX(companies.id)+1` 当假 TaskID 给资产打标（见下方 suffix），
-	// 一旦这个数字与别的用例的任务 id 撞上，那个用例按「恰好 N 个资产」的断言
-	// 就会莫名失败——排查成本极高。
-	t.Cleanup(func() { d.Close() })
+	defer d.Close()
 
 	var suffix int64
 	if err := d.QueryRow(`SELECT COALESCE(MAX(id),0)+1 FROM companies`).Scan(&suffix); err != nil {
@@ -254,18 +247,14 @@ func TestCompanyICPAttribution(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		// 不吞错误：清理失败会污染后续用例，必须让它在本次运行里显形。
-		if _, err := d.Exec(`DELETE FROM assets WHERE task_ids @> ARRAY[$1]::bigint[]`, suffix); err != nil {
-			t.Errorf("清理测试资产失败: %v", err)
-		}
-		if _, err := d.Exec(`DELETE FROM companies WHERE id=$1`, companyID); err != nil {
-			t.Errorf("清理测试公司失败: %v", err)
-		}
+		_, _ = d.Exec(`DELETE FROM assets WHERE task_ids @> ARRAY[$1]::bigint[]`, suffix)
+		_, _ = d.Exec(`DELETE FROM companies WHERE id=$1`, companyID)
 	})
 
 	// A keyword can guide an Agent, but must never claim an asset by its name.
+	icpValue := fmt.Sprintf("京 ICP备 %d号", 998877+suffix)
 	added, _, invalid, errs := cs.AddScopeInputs(companyID, []ScopeInput{
-		{Kind: "icp", Value: "京 ICP备 998877号"},
+		{Kind: "icp", Value: icpValue},
 		{Kind: "keyword", Value: "ICP Scope"},
 	}, "unit test")
 	if added != 2 || invalid != 0 || len(errs) != 0 {
@@ -273,7 +262,7 @@ func TestCompanyICPAttribution(t *testing.T) {
 	}
 
 	rootID, err := as.UpsertRootDomain(UpsertRootDomainReq{
-		Domain: fmt.Sprintf("icp-scope-%d.example", suffix), ICP: "京icp备998877号", TaskID: suffix,
+		Domain: fmt.Sprintf("icp-scope-%d.example", suffix), ICP: icpValue, TaskID: suffix,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -285,7 +274,7 @@ func TestCompanyICPAttribution(t *testing.T) {
 		t.Fatal(err)
 	}
 	icpAppID, err := as.UpsertApp(UpsertAppReq{
-		Name: fmt.Sprintf("ICP Matched App %d", suffix), ICP: " 京 ICP备 998877号 ", TaskID: suffix,
+		Name: fmt.Sprintf("ICP Matched App %d", suffix), ICP: " " + icpValue + " ", TaskID: suffix,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -334,8 +323,10 @@ func TestCompanyScopeAttribution(t *testing.T) {
 	uniq := startMax + 1
 	root := fmt.Sprintf("scopetest%d.com", uniq)
 	sub := "api." + root
-	ipIn := "198.51.100.9"
-	ipOut := "203.0.113.9"
+	ipNonce := uint64(time.Now().UnixNano())
+	ipIn := fmt.Sprintf("fd%02x:%x:%x::9", byte(ipNonce), uint16(ipNonce>>8), uint16(ipNonce>>24))
+	ipCIDR := ipIn[:strings.LastIndex(ipIn, "::")] + "::/64"
+	ipOut := fmt.Sprintf("fc%02x:%x:%x::9", byte(ipNonce), uint16(ipNonce>>16), uint16(ipNonce>>32))
 	outDomain := fmt.Sprintf("other%d.net", uniq)
 
 	cid, _, err := cs.UpsertCompany(fmt.Sprintf("ScopeCo %d", uniq), "")
@@ -354,7 +345,7 @@ func TestCompanyScopeAttribution(t *testing.T) {
 		t.Fatalf("pre-scope asset should be unattributed, got %v", *preCompanyID)
 	}
 
-	cs.AddScope(cid, []string{root, "198.51.100.0/24"}, "unit test")
+	cs.AddScope(cid, []string{root, ipCIDR}, "unit test")
 
 	mustCid := func(id int64, want int64, label string) {
 		var cID *int64

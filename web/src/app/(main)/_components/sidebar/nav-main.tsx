@@ -1,13 +1,12 @@
 "use client";
 
-import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import * as React from "react";
 
-import { ChevronRight, MailIcon, PlusCircleIcon } from "lucide-react";
 import { api } from "@/lib/api";
+import { ChevronRight } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   DropdownMenu,
@@ -100,7 +99,11 @@ export function NavMain({ items }: NavMainProps) {
       return item.subItems.some((sub) => path.startsWith(sub.url));
     }
 
-    return path === item.url;
+    return (
+      path === item.url ||
+      (item.id === "tasks" && path === "/function/tasks/detail") ||
+      (item.id === "findings" && path.startsWith("/function/findings/"))
+    );
   };
 
   const isSubItemActive = (url: string) => {
@@ -171,32 +174,42 @@ function InterceptPendingBadge() {
       try {
         const list = await api.interceptPending();
         if (live) setCount(list.length);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
     poll();
     const t = setInterval(poll, 5000);
-    return () => { live = false; clearInterval(t); };
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
   }, []);
   if (count === 0) return null;
   return (
-    <SidebarMenuBadge className="flex h-4.5 min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold leading-none text-white shadow-sm ring-1 ring-amber-400/40">
+    <SidebarMenuBadge className="flex h-4.5 min-w-[18px] items-center justify-center rounded-md bg-amber-500 px-1 text-[10px] font-semibold leading-none text-white shadow-sm ring-1 ring-amber-400/40">
       {count > 99 ? "99+" : count}
     </SidebarMenuBadge>
   );
 }
 
 function NavLinkItem({ item, isActive, showIconFallback }: NavLinkItemProps) {
+  const { setOpenMobile } = useSidebar();
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild aria-disabled={item.disabled} tooltip={item.title} isActive={isActive}>
+      <SidebarMenuButton className="h-9" asChild aria-disabled={item.disabled} tooltip={item.title} isActive={isActive}>
         <Link
           prefetch={false}
+          onClick={() => setOpenMobile(false)}
           href={item.url}
           target={item.newTab ? "_blank" : undefined}
           rel={item.newTab ? "noreferrer" : undefined}
         >
           <NavLinkIcon item={item} showFallback={showIconFallback} />
           <span>{item.title}</span>
+          {item.id === "new-task" && (
+            <kbd className="ml-auto text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">⌘J</kbd>
+          )}
         </Link>
       </SidebarMenuButton>
       {item.id === "approvals" ? <InterceptPendingBadge /> : <NavItemBadge badge={item.badge} />}

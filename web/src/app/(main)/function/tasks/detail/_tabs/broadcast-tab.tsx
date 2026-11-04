@@ -24,14 +24,13 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { startPolling } from "@/lib/polling";
 import { api } from "@/lib/api";
 import { type Tone, toneClasses, toneDot } from "@/lib/status";
-import { taskAssetTypeLabel } from "@/lib/task-assets";
-import type { Edge, ExploreKind, FindingAsset, NewAssetType, TaskNode } from "@/lib/types";
+import type { Edge, ExploreKind, TaskNode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZES = [20, 50, 100];
@@ -144,7 +143,7 @@ const SUMMARY_FIELDS: Record<string, string[]> = {
 function summaryOf(n: TaskNode): string {
   const raw = n.payload ?? "";
   if (!raw.trim()) return "";
-  for (const field of SUMMARY_FIELDS[viewKind(n)] ?? []) {
+  for (const field of [...(SUMMARY_FIELDS[viewKind(n)] ?? []), "summary"]) {
     try {
       const obj: unknown = JSON.parse(raw);
       if (obj && typeof obj === "object") {
@@ -209,79 +208,15 @@ function KindChip({ kind }: { kind: string }) {
   );
 }
 
-// 节点锚定的资产:类型标签 + 可辨识文本。数据随播报页一起下发(node id → 资产),
-// 展开时直接展示,不额外请求。
-function AssetList({ assets, dense = false }: { assets: FindingAsset[]; dense?: boolean }) {
-  if (assets.length === 0) return null;
-  return (
-    <div>
-      <div className="mb-1.5 text-xs font-medium text-muted-foreground">涉及资产 · {assets.length}</div>
-      <ul className="flex flex-wrap gap-1.5">
-        {assets.map((a) => {
-          // 运行时 a.type 可能是标签表未覆盖的类型,退回原始字符串。转一层类型让回退不被判成多余。
-          const typeLabel =
-            (taskAssetTypeLabel as (t: NewAssetType) => string | undefined)(a.type as NewAssetType) || a.type;
-          return (
-            <li
-              key={a.id}
-              className={cn(
-                "inline-flex max-w-full items-center gap-1.5 rounded-md border bg-background px-2 py-0.5",
-                dense && "text-xs",
-              )}
-              title={`${typeLabel} · ${a.label}`}
-            >
-              <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">{typeLabel}</span>
-              <code className="truncate font-mono text-xs">{a.label}</code>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
-// 悬停在上下游条目上时弹出的节点名片:类型/状态/来源/时间 + 摘要 + payload 片段 + 涉及资产。
-// 数据来自本页已经拿到的 refs,不额外发请求——播报接口已经把邻居节点整份带回来了。
-function RelatedNodeCard({ node, assets }: { node: TaskNode; assets: FindingAsset[] }) {
-  const kind = viewKind(node);
-  const meta = KIND_META[kind] ?? KIND_META.fact;
-  const ts = Date.parse(node.ts);
-  const summary = summaryOf(node);
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <KindChip kind={kind} />
-        <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">#{node.id}</code>
-        <NodeStateBadge node={node} />
-        {node.priority > 0 && (kind === "goal" || kind === "intent") && (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">P{node.priority}</span>
-        )}
-      </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-        <span>类型 {meta.label}</span>
-        <span>来源 {node.origin || "system"}</span>
-        <span>{Number.isNaN(ts) ? node.ts : new Date(ts).toLocaleString("zh-CN")}</span>
-      </div>
-      <p className="line-clamp-4 text-xs break-words">{summary || "（无摘要）"}</p>
-      <AssetList assets={assets} dense />
-      <pre className="max-h-40 overflow-auto rounded border bg-muted/40 p-2 font-mono text-[11px] whitespace-pre-wrap">
-        {prettyPayload(node.payload)}
-      </pre>
-    </div>
-  );
-}
-
 // 一条播报涉及的上下游:上游 = 指向本节点的边,下游 = 本节点指出去的边。
 function RelatedList({
   title,
   rows,
   refs,
-  assets,
 }: {
   title: string;
   rows: Array<{ rel: string; id: string }>;
   refs: Record<string, TaskNode>;
-  assets: Record<string, FindingAsset[]>;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -296,20 +231,12 @@ function RelatedList({
                 {REL_LABEL[row.rel] ?? row.rel}
               </span>
               {node ? (
-                <HoverCard openDelay={150} closeDelay={100}>
-                  <HoverCardTrigger asChild>
-                    <button
-                      type="button"
-                      className="flex min-w-0 cursor-help items-center gap-2 text-left hover:underline"
-                    >
-                      <KindChip kind={viewKind(node)} />
-                      <span className="truncate">{summaryOf(node) || `节点 #${node.id}`}</span>
-                    </button>
-                  </HoverCardTrigger>
-                  <HoverCardContent align="start" className="w-96">
-                    <RelatedNodeCard node={node} assets={assets[node.id] ?? []} />
-                  </HoverCardContent>
-                </HoverCard>
+                <>
+                  <KindChip kind={viewKind(node)} />
+                  <span className="truncate" title={summaryOf(node)}>
+                    {summaryOf(node) || `节点 #${node.id}`}
+                  </span>
+                </>
               ) : (
                 <span className="text-muted-foreground">节点 #{row.id}</span>
               )}
@@ -321,22 +248,54 @@ function RelatedList({
   );
 }
 
-function BroadcastRow({
-  node,
-  edges,
-  refs,
-  assets,
-  now,
-  fresh,
-}: {
-  node: TaskNode;
-  edges: Edge[];
-  refs: Record<string, TaskNode>;
-  assets: Record<string, FindingAsset[]>;
-  now: number;
-  fresh: boolean;
-}) {
+function BroadcastRow({ node, taskId, now, fresh }: { node: TaskNode; taskId: string; now: number; fresh: boolean }) {
   const [open, setOpen] = React.useState(false);
+  const [detail, setDetail] = React.useState<import("@/lib/types").ExplorationNodeDetail | null>(null);
+  const [error, setError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const lastDetailPage = React.useRef<[number, number]>([0, 0]);
+  const controller = React.useRef<AbortController | null>(null);
+  const loadDetail = async (body = 0, edge = 0) => {
+    lastDetailPage.current = [body, edge];
+    controller.current?.abort();
+    const c = new AbortController();
+    controller.current = c;
+    const timer = setTimeout(() => c.abort(new Error("详情加载超时，请重试")), 15000);
+    setBusy(true);
+    setError("");
+    try {
+      const d = await api.explorationNodeDetail(taskId, node.id, body, edge, c.signal);
+      if (c.signal.aborted) return;
+      setDetail((prev) =>
+        !prev
+          ? d
+          : {
+              ...d,
+              payload: body < 0 ? prev.payload : body === 0 ? d.payload : prev.payload + d.payload,
+              payload_next_offset: body < 0 ? prev.payload_next_offset : d.payload_next_offset,
+              edges: edge < 0 ? prev.edges : edge === 0 ? d.edges : [...prev.edges, ...d.edges],
+              edges_next_offset: edge < 0 ? prev.edges_next_offset : d.edges_next_offset,
+              refs: { ...prev.refs, ...d.refs },
+            },
+      );
+    } catch (e) {
+      if (controller.current === c && (!c.signal.aborted || c.signal.reason?.message?.includes("超时")))
+        setError((e as Error).message);
+    } finally {
+      clearTimeout(timer);
+      if (controller.current === c) setBusy(false);
+    }
+  };
+  React.useEffect(() => {
+    if (open) void loadDetail();
+    return () => {
+      controller.current?.abort();
+      controller.current = null;
+    };
+    // Details are fetched on expansion, not on every list poll.
+  }, [open, taskId, node.id]);
+  const edges = detail?.edges ?? [];
+  const refs = detail?.refs ?? {};
   const kind = viewKind(node);
   const meta = KIND_META[kind] ?? KIND_META.fact;
   const Icon = meta.icon;
@@ -379,7 +338,6 @@ function BroadcastRow({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <KindChip kind={kind} />
-              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">#{node.id}</code>
               <NodeStateBadge node={node} />
               {node.priority > 0 && (kind === "goal" || kind === "intent") && (
                 <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">P{node.priority}</span>
@@ -405,25 +363,37 @@ function BroadcastRow({
               <span>来源 {node.origin || "system"}</span>
               <span>{Number.isNaN(ts) ? node.ts : new Date(ts).toLocaleString("zh-CN")}</span>
             </div>
-            {node.state === "deleted" && node.delete_reason && (
-              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs">
-                <span className="font-medium text-destructive">删除原因</span>
-                <span className="ml-2 break-words text-muted-foreground">{node.delete_reason}</span>
-              </div>
+            {busy && <p>加载详情…</p>}
+            {error && (
+              <p role="alert">
+                {error}
+                <Button variant="ghost" onClick={() => void loadDetail(...lastDetailPage.current)}>
+                  重试
+                </Button>
+              </p>
             )}
-            <AssetList assets={assets[node.id] ?? []} />
             {(upstream.length > 0 || downstream.length > 0) && (
               <div className="flex flex-col gap-3 sm:flex-row">
-                <RelatedList title="上游 · 由此而来" rows={upstream} refs={refs} assets={assets} />
-                <RelatedList title="下游 · 由此产生" rows={downstream} refs={refs} assets={assets} />
+                <RelatedList title="上游 · 由此而来" rows={upstream} refs={refs} />
+                <RelatedList title="下游 · 由此产生" rows={downstream} refs={refs} />
               </div>
             )}
             <div>
               <div className="mb-1.5 text-xs font-medium text-muted-foreground">payload</div>
               <pre className="max-h-64 overflow-auto rounded-md border bg-background p-3 font-mono text-xs whitespace-pre-wrap">
-                {prettyPayload(node.payload)}
+                {detail ? prettyPayload(detail.payload) : ""}
               </pre>
             </div>
+            {detail && detail.payload_next_offset >= 0 && (
+              <Button variant="outline" disabled={busy} onClick={() => void loadDetail(detail.payload_next_offset, -1)}>
+                加载后续正文
+              </Button>
+            )}
+            {detail && detail.edges_next_offset >= 0 && (
+              <Button variant="outline" disabled={busy} onClick={() => void loadDetail(-1, detail.edges_next_offset)}>
+                加载更多关联节点
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -441,9 +411,8 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
   const [live, setLive] = React.useState(true);
 
   const [items, setItems] = React.useState<TaskNode[]>([]);
-  const [edges, setEdges] = React.useState<Edge[]>([]);
-  const [refs, setRefs] = React.useState<Record<string, TaskNode>>({});
-  const [assets, setAssets] = React.useState<Record<string, FindingAsset[]>>({});
+  const [loadError, setLoadError] = React.useState("");
+  const polling = React.useRef<ReturnType<typeof startPolling> | null>(null);
   const [total, setTotal] = React.useState(0);
   const [loaded, setLoaded] = React.useState(false);
   const [freshIDs, setFreshIDs] = React.useState<Set<string>>(new Set());
@@ -484,18 +453,16 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
       baselineRef.current = null;
       setPending(0);
     }
-    const load = () =>
+    const load = (signal: AbortSignal) =>
       api
-        .explorationNodes(taskId, { page, size, kinds, q: query, order })
+        .explorationNodes(taskId, { page, size, kinds, q: query, order, countOnly: !atLive && rendered }, signal)
         .then((r) => {
-          if (!alive) return;
+          if (!alive || signal.aborted) return;
+          setLoadError("");
           // 直播位每轮都刷新;其它位置只渲染第一次,之后轮询仅更新未读计数。
           if (atLive || !rendered) {
             rendered = true;
             setItems(r.items);
-            setEdges(r.edges);
-            setRefs(r.refs);
-            setAssets(r.assets);
           }
           setTotal(r.total);
           if (atLive) {
@@ -510,19 +477,17 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
           }
           setLoaded(true);
         })
-        .catch(() => {
-          // 轮询是尽力而为:保留上一次成功的播报内容,下一轮自动重试。
+        .catch((e: Error) => {
+          if (alive && (!signal.aborted || signal.reason?.message?.includes("超时"))) {
+            setLoadError(e.message);
+            setLoaded(true);
+          }
         });
-    void load();
-    if (!live) {
-      return () => {
-        alive = false;
-      };
-    }
-    const timer = setInterval(load, POLL_MS);
+    const next = startPolling(load, live ? POLL_MS : null);
+    polling.current = next;
     return () => {
       alive = false;
-      clearInterval(timer);
+      next.stop();
     };
   }, [taskId, page, size, kinds, query, order, live, atLive]);
 
@@ -536,14 +501,6 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
     setOrder("desc");
     setPending(0);
   };
-
-  // 服务端的 refs 只补「不在本页的邻居」,同页节点之间的引用要靠 items 自己兜底,
-  // 否则相邻两条播报互相引用时会退化成光秃秃的「节点 #id」。
-  const nodeIndex = React.useMemo(() => {
-    const idx: Record<string, TaskNode> = { ...refs };
-    for (const n of items) idx[n.id] = n;
-    return idx;
-  }, [refs, items]);
 
   const pageCount = Math.max(1, Math.ceil(total / size));
   const start = total === 0 ? 0 : (page - 1) * size + 1;
@@ -566,6 +523,14 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
 
   return (
     <Card className="overflow-hidden py-0">
+      {loadError && (
+        <p role="alert">
+          {loadError}
+          <Button variant="ghost" onClick={() => polling.current?.refresh()}>
+            重试
+          </Button>
+        </p>
+      )}
       {/* 工具条 */}
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
         <div className="relative w-full sm:w-64">
@@ -666,15 +631,7 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
             <div key={group.day}>
               <div className="py-2 pl-[6.25rem] text-xs font-medium text-muted-foreground">{group.day}</div>
               {group.rows.map((node) => (
-                <BroadcastRow
-                  key={node.id}
-                  node={node}
-                  edges={edges}
-                  refs={nodeIndex}
-                  assets={assets}
-                  now={now}
-                  fresh={freshIDs.has(node.id)}
-                />
+                <BroadcastRow key={node.id} node={node} taskId={taskId} now={now} fresh={freshIDs.has(node.id)} />
               ))}
             </div>
           ))

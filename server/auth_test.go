@@ -4,8 +4,41 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
+
+func TestJWTRequiresCurrentIdentityAndAlgorithm(t *testing.T) {
+	key := []byte("isolated-brand-test-signing-key")
+	current, err := signJWT(key)
+	if err != nil || !verifyJWT(current, key) {
+		t.Fatalf("current identity rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		name, subject string
+		method        jwt.SigningMethod
+	}{
+		{"previous identity", "previous-product", jwt.SigningMethodHS256},
+		{"missing identity", "", jwt.SigningMethodHS256},
+		{"wrong algorithm", "SERIES", jwt.SigningMethodHS384},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token, err := jwt.NewWithClaims(tc.method, jwt.RegisteredClaims{
+				Subject:   tc.subject,
+				ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			}).SignedString(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verifyJWT(token, key) {
+				t.Fatal("unexpectedly accepted token")
+			}
+		})
+	}
+}
 
 // GetSetting 对"键不存在"和"读取出错"的返回值只差一个 error：两种情况 value 都是
 // 空串。密码相关的 handler 一旦把 error 当成"还没设置密码"，就会在数据库抖动期间
@@ -80,5 +113,52 @@ func TestValidatePassword(t *testing.T) {
 				t.Fatalf("validatePassword(%q)=%q, wantErr=%v", tc.pw, got, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestAuthInitConcurrentCannotOverwrite(t *testing.T) {
+	m, err := NewManager(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	old, exists, err := m.pg.GetSetting(authPassKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if exists {
+			m.pg.SetSetting(authPassKey, old)
+		} else {
+			m.pg.Exec(`DELETE FROM settings WHERE key=$1`, authPassKey)
+		}
+	}()
+	if _, err := m.pg.Exec(`DELETE FROM settings WHERE key=$1`, authPassKey); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{m: m, jwtKey: []byte("sync-only-test-key-not-production")}
+	var wg sync.WaitGroup
+	codes := make(chan int, 8)
+	for i := 0; i < cap(codes); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w := httptest.NewRecorder()
+			s.authInit(w, httptest.NewRequest("POST", "/api/auth/init", strings.NewReader(`{"password":"sync-test-password"}`)))
+			codes <- w.Code
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	success := 0
+	for code := range codes {
+		if code == 200 {
+			success++
+		} else if code != 403 {
+			t.Fatalf("unexpected status %d", code)
+		}
+	}
+	if success != 1 {
+		t.Fatalf("successful initializations=%d", success)
 	}
 }

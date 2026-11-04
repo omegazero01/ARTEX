@@ -1,6 +1,7 @@
 package traffic
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,7 +11,25 @@ import (
 	"testing"
 
 	mproxy "github.com/lqqyt2423/go-mitmproxy/proxy"
+	"github.com/neouks/series/guard"
 )
+
+func TestProxyTaskID(t *testing.T) {
+	username, password, _ := guard.TaskProxyCredentials(73)
+	header := "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password))
+	if id, tagged, err := guard.ParseTaskProxyAuthorization(header); err != nil || !tagged || id != 73 {
+		t.Fatalf("proxyTaskID=(%d,%v,%v)", id, tagged, err)
+	}
+	if _, tagged, err := guard.ParseTaskProxyAuthorization("Basic " + base64.StdEncoding.EncodeToString([]byte("ordinary:user"))); err != nil || tagged {
+		t.Fatalf("ordinary credentials tagged=%v err=%v", tagged, err)
+	}
+	if _, tagged, err := guard.ParseTaskProxyAuthorization("Basic " + base64.StdEncoding.EncodeToString([]byte("series-task-nope:invalid"))); err == nil || !tagged {
+		t.Fatalf("invalid internal credentials tagged=%v err=%v", tagged, err)
+	}
+	if _, tagged, err := guard.ParseTaskProxyAuthorization("Basic " + base64.StdEncoding.EncodeToString([]byte("series-task-74:"+password))); err == nil || !tagged {
+		t.Fatalf("tampered task credentials tagged=%v err=%v", tagged, err)
+	}
+}
 
 func TestRequestHeaderLinesIncludesHost(t *testing.T) {
 	req := &mproxy.Request{

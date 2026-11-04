@@ -14,15 +14,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/traffic"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/traffic"
 )
 
 func evidenceFixture(t *testing.T) (*Store, db.RecordFindingInput, string) {
 	t.Helper()
-	dsn := os.Getenv("ARTEX_PG_DSN")
+	dsn := os.Getenv("SERIES_PG_DSN")
 	if dsn == "" {
-		t.Skip("ARTEX_PG_DSN is required for evidence integration tests")
+		t.Skip("SERIES_PG_DSN is required for evidence integration tests")
 	}
 	pg, err := db.Open(dsn)
 	if err != nil {
@@ -121,14 +121,14 @@ func TestEvidenceBindingLifecycle(t *testing.T) {
 		}
 	}
 	v := again.Version
-	if _, err = s.DB.SetFindingReportVersionByNodeID(ctx, r.NodeID, "report", &v); err != nil {
+	if _, err = s.DB.SetFindingReportVersionByNodeID(ctx, r.NodeID, "report", "report", &v); err != nil {
 		t.Fatal(err)
 	}
 	note := "updated"
 	if err = s.DB.EditFindingTraffic(ctx, r.FindingID, again.Bindings[0].ID, v, nil, &note, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DB.SetFindingReportVersionByNodeID(ctx, r.NodeID, "stale report", &v); !errors.Is(err, db.ErrEvidenceConflict) {
+	if _, err = s.DB.SetFindingReportVersionByNodeID(ctx, r.NodeID, "stale report", "stale report", &v); !errors.Is(err, db.ErrEvidenceConflict) {
 		t.Fatalf("stale report: %v", err)
 	}
 	f, err := s.DB.GetFinding(r.FindingID)

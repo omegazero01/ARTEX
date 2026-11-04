@@ -1,0 +1,1195 @@
+# 文件级覆盖索引（SERIES ∪ ARTEX，共 1191 个）
+
+状态口径：差异已逐行读 / 独有正文已读 / 重命名与品牌化逐条核验 / 纯空白等价验证 / 两侧相同。
+
+- `"docs/\346\274\217\346\264\236\346\265\201\351\207\217\350\257\201\346\215\256.md"` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `"docs/review/\344\270\215\347\272\263\345\205\245/\346\212\245\345\221\212-158-\351\233\205\346\230\237\345\205\254\344\272\244\346\234\252\346\216\210\346\235\203\344\277\241\346\201\257\346\263\204\351\234\262-20261023.md"` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `"docs/review/\346\212\245\345\221\212-155-\345\275\261\345\203\217\347\263\273\347\273\237\346\260\264\345\271\263\350\266\212\346\235\203-20261023.md"` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `"docs/review/\346\212\245\345\221\212-156-\346\235\203\347\233\212\351\207\215\345\244\215\351\242\206\345\217\226-20261023.md"` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `"docs/review/\346\212\245\345\221\212-156-\347\247\257\345\210\206\345\225\206\345\237\216\351\200\200\346\254\276\351\207\221\351\242\235\347\257\241\346\224\271-20261023.md"` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `"docs/review/\346\212\245\345\221\212-156-\350\256\242\345\215\225\346\216\245\347\256\241-20261023.md"` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `"docs/review/\346\212\245\345\221\212-156-\351\223\266\350\241\214\345\215\241\345\217\267\350\266\212\346\235\203\346\237\245\350\257\242-20261023.md"` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `"docs/review/\346\212\245\345\221\212-158-\351\252\214\350\257\201\347\240\201\347\273\225\350\277\207-20261023.md"` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `"docs/review/\346\212\245\345\221\212-\347\247\257\345\210\206\345\225\206\345\237\216SQL\346\263\250\345\205\245-20261023-v2.md"` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `.DS_Store` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `.dockerignore` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `.env.example` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `.gitattributes` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `.github/workflows/release.yml` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `.gitignore` — 差异已逐行读（230 组之一）
+- `.zcode/plans/plan-sess_354ed7fe-47b6-4853-8dfe-718620b00145.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `CHANGELOG.md` — 差异已逐行读（230 组之一）
+- `Dockerfile` — 差异已逐行读（230 组之一）
+- `LICENSE` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `PORTING-AUDIT.md` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `PORTING-CODE-COMPARE.md` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `PORTING-RULES.md` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `PORTING.md` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `README.md` — 差异已逐行读（230 组之一）
+- `agent/assembly.go` — 差异已逐行读（230 组之一）
+- `agent/assembly_failure_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/asset_context.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/asset_context_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/asset_management_context.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/asset_origin_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/asset_skip_scope_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/asset_tools.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/assets_approval_dsl_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/bash_prompt_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `agent/blackboard_inheritance_test.go` — 差异已逐行读（230 组之一）
+- `agent/builtin_review_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/cancelcause.go` — 差异已逐行读（230 组之一）
+- `agent/capture.go` — 差异已逐行读（230 组之一）
+- `agent/capture_approval_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/capture_usage_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/chat.go` — 差异已逐行读（230 组之一）
+- `agent/chat_task_policy_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/coldgraph.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/coldgraph_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/compaction.go` — 差异已逐行读（230 组之一）
+- `agent/compaction_review_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/constraints.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/context_budget.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_compat_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_match_read_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_mixed.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_performance_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_policy.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_policy_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_prompt_measurement_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_prompt_migration.go` — 差异已逐行读（230 组之一）
+- `agent/context_prompt_migration_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_review_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_task.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_task_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_tools.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_tools_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/context_window_metrics_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/coverage_params_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/deferred.go` — 差异已逐行读（230 组之一）
+- `agent/deferred_test.go` — 差异已逐行读（230 组之一）
+- `agent/digest_authorization_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/fact_contract_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/finding_deletion_feedback.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/finding_deletion_feedback_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/finding_feedback_context.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/finding_feedback_context_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/finding_recorder.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/finding_recorder_test.go` — 差异已逐行读（230 组之一）
+- `agent/finding_workflow.go` — 差异已逐行读（230 组之一）
+- `agent/finding_workflow_test.go` — 差异已逐行读（230 组之一）
+- `agent/findings_pagination_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/goals.go` — 差异已逐行读（230 组之一）
+- `agent/graph_context_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/hint_trigger_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/host_lessons.go` — 差异已逐行读（230 组之一）
+- `agent/host_lessons_test.go` — 差异已逐行读（230 组之一）
+- `agent/host_profile.go` — 差异已逐行读（230 组之一）
+- `agent/host_profile_test.go` — 差异已逐行读（230 组之一）
+- `agent/insert_assets_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/intent_dispatch.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/intent_dispatch_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/intent_stop.go` — 差异已逐行读（230 组之一）
+- `agent/intent_stop_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/lightformat.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/lightformat_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/local_tools.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/main_dispatch_feedback.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/main_dispatch_feedback_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/main_execution.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/main_execution_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/mainagent.go` — 差异已逐行读（230 组之一）
+- `agent/memory_tools.go` — 差异已逐行读（230 组之一）
+- `agent/memory_tools_test.go` — 差异已逐行读（230 组之一）
+- `agent/noa.go` — 差异已逐行读（230 组之一）
+- `agent/noa_asset_context.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/noa_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/official_provider_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/official_runtime_review_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/one_shot_session_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/overview_config.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/overview_lean.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/overview_lean_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/overview_projection.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/overview_projection_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/overview_sync_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/planner.go` — 差异已逐行读（230 组之一）
+- `agent/planner_asset_prompt_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/planner_bootstrap.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/planner_bootstrap_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/planner_context_metrics_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/planner_proactive_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/planner_scenario_metrics_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/planner_user_cancel_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/prompt.go` — 差异已逐行读（230 组之一）
+- `agent/prompt_now_test.go` — 纯空白：git diff -w 为空，内容等价
+- `agent/prompt_test.go` — 差异已逐行读（230 组之一）
+- `agent/promptcatalog.go` — 差异已逐行读（230 组之一）
+- `agent/provider.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/provider_capture_e2e_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/provider_capture_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/provider_quota_test.go` — 纯空白：git diff -w 为空，内容等价
+- `agent/provider_responses_test.go` — 纯空白：git diff -w 为空，内容等价
+- `agent/proxyenv_test.go` — 差异已逐行读（230 组之一）
+- `agent/retester.go` — 差异已逐行读（230 组之一）
+- `agent/retrieval_access_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/retrieval_history.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/retrieval_history_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/retrieval_noa_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/review_context_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/runinfo.go` — 差异已逐行读（230 组之一）
+- `agent/sdk_review_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/sdk_session.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/sdk_session_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/session_header_test.go` — 纯空白：git diff -w 为空，内容等价
+- `agent/settlement_gate.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `agent/settlement_gate_test.go` — 差异已逐行读（230 组之一）
+- `agent/side_questions.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/side_questions_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/structured_capture.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/structured_capture_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/structured_history.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/structured_history_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/target_access_context.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/target_access_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/taskclock.go` — 纯空白：git diff -w 为空，内容等价
+- `agent/taskmanager.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/terminalreason.go` — 差异已逐行读（230 组之一）
+- `agent/terminalreason_test.go` — 纯空白：git diff -w 为空，内容等价
+- `agent/testmain_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/tool_assets_budget_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_budget.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_budget_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_contract.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_contract_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_defaults.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_detail_contract_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_documentation_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_error_guidance_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_history.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_input.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_input_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_inventory_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_read_scope.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_surface_metrics_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_ua.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tool_ua_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/toolcatalog.go` — 差异已逐行读（230 组之一）
+- `agent/toolcatalog_test.go` — 纯空白：git diff -w 为空，内容等价
+- `agent/tools.go` — 差异已逐行读（230 组之一）
+- `agent/tools_asset_view.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tools_asset_view_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tools_contract_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tools_description_assets.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tools_digest.go` — 差异已逐行读（230 组之一）
+- `agent/tools_insert.go` — 差异已逐行读（230 组之一）
+- `agent/tools_nil_store_test.go` — 纯空白：git diff -w 为空，内容等价
+- `agent/tools_overview_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `agent/tools_smartproxy.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tools_smartproxy_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/tools_target_access.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/worker.go` — 差异已逐行读（230 组之一）
+- `agent/worker_context.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/worker_execution.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/worker_execution_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/worker_intervention_test.go` — 差异已逐行读（230 组之一）
+- `agent/worker_trace_tools_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `agent/wrapup.go` — 差异已逐行读（230 组之一）
+- `artifacts/asset-approval-performance-review.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-approval-refactor.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-approval-templates.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/README.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/agent.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/db-final.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/error-after.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/error-before.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/multiple-verified.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/pagination-verified.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/retry-verified.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/scenarios-verified.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/server-final.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/asset-source-review-20260916/types-final.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/builtin-system-prompts.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/cold-compactor-sync-20260919/README.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/cold-compactor-sync-20260919/agent.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/cold-compactor-sync-20260919/before.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/cold-compactor-sync-20260919/server.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/mcp-optimization-20260919/README.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/performance-fixes-20260919/README.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/performance-fixes-20260919/agent.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/performance-fixes-20260919/browser.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/performance-fixes-20260919/db-verified.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/performance-fixes-20260919/server-verified.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/performance-fixes-20260919/types-final.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/performance-fixes-20260919/web-verified.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/review-20260908-20260911.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/task-detail-first-entry-waterfall.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/task-detail-loading-review.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/task-execution-mode-20260920/README.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/task-execution-mode-20260920/agent.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/task-execution-mode-20260920/browser.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/task-execution-mode-20260920/db-race.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/task-execution-mode-20260920/db.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/task-execution-mode-20260920/mock.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/task-execution-mode-20260920/server-race.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/task-execution-mode-20260920/server.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-a590b41-20260920/README.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-a590b41-20260920/agent.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-a590b41-20260920/noa-race.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-a590b41-20260920/norma.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260916.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260916/agent-fixed.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260916/browser.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260916/noa-race.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260916/norma-fixed.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260916/norma-local.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260916/norma-upstream.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260916/server-fixed.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260919/README.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260919/agent.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260919/build.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260919/db.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260919/features.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260919/local-browser.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260919/server-final.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260919/source-browser.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260919/types.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `artifacts/upstream-sync-20260919/web-tests.log` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `build-docker.sh` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `build.sh` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `cmd/artex/main.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `cmd/artex/main_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `cmd/series/main.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `cmd/series/main_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `config.example.json` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `config/config.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `config/config_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `db/activity_page_test.go` — 差异已逐行读（230 组之一）
+- `db/activity_search.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/activity_search_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/activity_window.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/activity_window_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_approval_groups.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_context.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_dsl.go` — 差异已逐行读（230 组之一）
+- `db/asset_dsl_parse_test.go` — 两侧字节相同
+- `db/asset_dsl_task_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_intercept.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_intercept_match.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_intercept_match_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_origins.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_origins_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_skips.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_skips_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_templates.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_templates.sql` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/asset_templates_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/assets.go` — 差异已逐行读（230 组之一）
+- `db/assets_test.go` — 差异已逐行读（230 组之一）
+- `db/broadcast.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/broadcast_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/chat_mentions.go` — 差异已逐行读（230 组之一）
+- `db/commands.go` — 纯空白：git diff -w 为空，内容等价
+- `db/companies.go` — 差异已逐行读（230 组之一）
+- `db/companies_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/company_lock_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/company_scope.go` — 差异已逐行读（230 组之一）
+- `db/company_scope_consistency_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/company_scope_test.go` — 差异已逐行读（230 组之一）
+- `db/config.go` — 差异已逐行读（230 组之一）
+- `db/config_max_tokens_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/config_session_header_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/config_test.go` — 差异已逐行读（230 组之一）
+- `db/constants.go` — 差异已逐行读（230 组之一）
+- `db/constraints.go` — 纯空白：git diff -w 为空，内容等价
+- `db/context_assets.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/context_mixed.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/context_mixed_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/context_prompt_migration.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/context_reads.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/context_reads_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/context_review_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/conversation.go` — 纯空白：git diff -w 为空，内容等价
+- `db/conversation_pin_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/customtool_test.go` — 差异已逐行读（230 组之一）
+- `db/db.go` — 差异已逐行读（230 组之一）
+- `db/db_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/derived_asset_approval_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/derived_asset_migration_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/derived_asset_parents.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/derived_asset_parents_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/description_assets.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/description_assets_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/digest.go` — 纯空白：git diff -w 为空，内容等价
+- `db/execution_mode.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/execution_mode_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/exploration.go` — 差异已逐行读（230 组之一）
+- `db/exploration_sources.go` — 纯空白：git diff -w 为空，内容等价
+- `db/exploration_sources_test.go` — 差异已逐行读（230 组之一）
+- `db/exploration_test.go` — 差异已逐行读（230 组之一）
+- `db/exploration_tokens_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/finding_access.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/finding_access_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/finding_assets.go` — 纯空白：git diff -w 为空，内容等价
+- `db/finding_assets_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/finding_deletion_feedback.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/finding_deletion_feedback_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/finding_retests.go` — 差异已逐行读（230 组之一）
+- `db/finding_retests_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/finding_suppression.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/finding_traffic.go` — 差异已逐行读（230 组之一）
+- `db/finding_traffic_archive.go` — 纯空白：git diff -w 为空，内容等价
+- `db/finding_traffic_archive_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/findings.go` — 差异已逐行读（230 组之一）
+- `db/findings_patch_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/findings_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/host_approval_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/host_isolation_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/intent_admission.go` — 差异已逐行读（230 组之一）
+- `db/intent_control_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/intent_delete_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `db/intent_user_control.go` — 差异已逐行读（230 组之一）
+- `db/intent_user_control_test.go` — 差异已逐行读（230 组之一）
+- `db/intercept.go` — 差异已逐行读（230 组之一）
+- `db/intercept_detail.go` — 纯空白：git diff -w 为空，内容等价
+- `db/intercept_detail_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/intercept_execution.go` — 纯空白：git diff -w 为空，内容等价
+- `db/intercept_execution_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/intercept_filter_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/intercept_seed_test.go` — 差异已逐行读（230 组之一）
+- `db/jsonb_clean_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/lineage_batch_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/llm_records_migrate_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/llm_usage.go` — 差异已逐行读（230 组之一）
+- `db/llmhealth.go` — 纯空白：git diff -w 为空，内容等价
+- `db/llmretry.go` — 纯空白：git diff -w 为空，内容等价
+- `db/llmretry_test.go` — 差异已逐行读（230 组之一）
+- `db/logs.go` — 纯空白：git diff -w 为空，内容等价
+- `db/main_execution.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/main_execution_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/manual_scope_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/mcp_usage.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/mcp_usage_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/nkey.go` — 纯空白：git diff -w 为空，内容等价
+- `db/notification.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `db/notification_delivery.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `db/notification_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `db/performance_indexes.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/performance_indexes_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/planner_asset_search_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/planner_context.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/planner_context_migration.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/planner_context_migration_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/planner_context_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/prompt_contracts_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/read_performance_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/review_migration_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/schema.sql` — 差异已逐行读（230 组之一）
+- `db/settings.go` — 差异已逐行读（230 组之一）
+- `db/settings_insert_test.go` — 差异已逐行读（230 组之一）
+- `db/side_questions.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `db/side_questions_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `db/skill_usage.go` — 纯空白：git diff -w 为空，内容等价
+- `db/skill_usage_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/target_access_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_archive_aggregate_stats.go` — 差异已逐行读（230 组之一）
+- `db/task_archives.go` — 差异已逐行读（230 组之一）
+- `db/task_archives_restore.go` — 差异已逐行读（230 组之一）
+- `db/task_archives_test.go` — 差异已逐行读（230 组之一）
+- `db/task_asset_block_recreation_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_asset_blocking.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_asset_blocking_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_asset_view.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_asset_view_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_assets.go` — 差异已逐行读（230 组之一）
+- `db/task_assets_context.go` — 差异已逐行读（230 组之一）
+- `db/task_assets_test.go` — 差异已逐行读（230 组之一）
+- `db/task_categories.go` — 纯空白：git diff -w 为空，内容等价
+- `db/task_categories_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/task_company_assets.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_company_assets_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_context.go` — 差异已逐行读（230 组之一）
+- `db/task_context_lock_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/task_context_unit_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/task_delete_concurrency_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/task_findings_page.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_findings_page_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_intercept.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_list_performance_test.go` — 差异已逐行读（230 组之一）
+- `db/task_metadata_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/task_notifications.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_notifications_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/task_queue_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/task_scope.go` — 差异已逐行读（230 组之一）
+- `db/task_scope_test.go` — 差异已逐行读（230 组之一）
+- `db/task_source_limit_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/task_templates.go` — 差异已逐行读（230 组之一）
+- `db/task_templates_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/tasks.go` — 差异已逐行读（230 组之一）
+- `db/tasks_test.go` — 差异已逐行读（230 组之一）
+- `db/testmain_test.go` — 纯空白：git diff -w 为空，内容等价
+- `db/tool_calls.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/tool_calls_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/tool_context_catalog.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/tool_context_catalog_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/tool_reads.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/tool_reads_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/tool_usage.go` — 差异已逐行读（230 组之一）
+- `db/tool_usage_backfill.sql` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/tool_usage_test.go` — 差异已逐行读（230 组之一）
+- `db/tools.go` — 差异已逐行读（230 组之一）
+- `db/triggers.go` — 纯空白：git diff -w 为空，内容等价
+- `db/worker_execution.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/worker_feedback.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/worker_feedback_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/worker_queue.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `db/worker_queue_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `dev.sh` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `docker-compose.bench.yml` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `docker-compose.yml` — 差异已逐行读（230 组之一）
+- `docs/builtin-tools-query-contract.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/context-retrieval-window-20261019.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/http-entry-auth.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/main-pending-execution-verification-20260922.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/mcp-shell-review/mcp-desktop-light.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/mcp-shell-review/mcp-mobile-dark.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/mcp-shell-review/shell-test-dark.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/mcp-shell-verification-20260922.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/norma-official-20261018.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/planner-asset-search-20261019.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/proposals/agent-view-slimming.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/proposals/planner-fact-selection-v2.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/proposals/planner-fact-selection.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/proposals/tool-result-compaction.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/proposals/windows-skill-path.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/screenshots/findings-ui-20261019/global-dark.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/screenshots/findings-ui-20261019/global-light.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/screenshots/findings-ui-20261019/task-light.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/screenshots/findings-ui-20261019/task-mobile.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/screenshots/task-controls-20261019/desktop-dark.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/screenshots/task-controls-20261019/desktop-light.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/screenshots/task-controls-20261019/mobile-dark.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/screenshots/task-controls-20261019/settings.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/series-rename-20261009.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/session-search-verification-20260921.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/tool-contract-review-20260913.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/tool-execution-boundary-fixes-20260913.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/build-metrics.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/conversation-dark-source.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/conversation-source.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/login.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/new-task-desktop.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/new-task-mobile.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/request-metrics.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/settings-desktop.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/settings-mobile.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/setup.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/sidebar-without-search.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/tasks-desktop.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/ui-neo/verification.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/upstream-sync-20260913.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/upstream-sync-20260929.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/upstream-sync-20260930.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/upstream-sync-20261008.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification-20260929/asset-origin.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification-20260929/exploration-graph.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification-20260929/task-severity.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/agent-view-slimming-20261022.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-policy-20261026.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/context-get-editor.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/measurements.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/results.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/review-compile-final.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/review-final.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/review-metrics.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/review-norma.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/review-server-final.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/review-surface.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/review.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/source-location.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/context-tools-20261018/test-summary.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/export-unified-20261024.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/finding-suppression-20261019/results.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/finding-suppression-20261019/review-results.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/finding-suppression-20261019/rules-active.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/finding-suppression-20261019/rules-revoked.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/host-adaptation-20261025.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-fact-selection-20261023.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/agent-tests.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/compile.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/db-tests.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/guard-tests.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/jit-diagnostic.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/overview-metrics.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/planner-runs.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/race-tests.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/results.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/scenario-after.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/scenario-before.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/server-focused.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/server-tests.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-on-demand-20261023/vet.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-overview-config-20261022.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/agent-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/compile.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/db-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/examples.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/guard-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/metrics-after.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/metrics-before.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/race.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/results.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/runs-before.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/server-final.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/server-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-20261026/vet.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-review-20261026/agent-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-review-20261026/agent-race.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-review-20261026/build.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-review-20261026/compile.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-review-20261026/db-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-review-20261026/guard-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-review-20261026/results.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-review-20261026/server-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-review-20261026/server-race.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/planner-proactive-review-20261026/vet.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/report-length-budget-20261026.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/report-template-20261023.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/revert-05c8e90-prompt-20261030.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/settlement-prefix-20261028.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/upstream-335bd2e-20261029.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/upstream-b76c684-20261030.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/windows-skill-path-20261021.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/agent-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/agent-race.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/build.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/db-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/guard-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/results.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/sdk-focused.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/server-full-final.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/server-full.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/server-race.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/verification/worker-context-search-20261026/vet.txt` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/worker-feedback-verification-20260925.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `docs/worker-queue.md` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `enrich/enrich.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `evidence/store.go` — 差异已逐行读（230 组之一）
+- `evidence/store_test.go` — 差异已逐行读（230 组之一）
+- `evidence/testmain_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `go.mod` — 差异已逐行读（230 组之一）
+- `go.sum` — 差异已逐行读（230 组之一）
+- `guard/assets.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `guard/assets_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `guard/compress_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `guard/guard.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `guard/guard_test.go` — 纯空白：git diff -w 为空，内容等价
+- `guard/proxy_scope_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `guard/proxy_tag.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `install.sh` — 差异已逐行读（230 组之一）
+- `intercept/intercept.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `intercept/prompt.go` — 差异已逐行读（230 组之一）
+- `intercept/prompt_test.go` — 纯空白：git diff -w 为空，内容等价
+- `intercept/review_context.go` — 纯空白：git diff -w 为空，内容等价
+- `intercept/review_context_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `intercept/trace.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `intercept/trace_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `llmpool/health.go` — 纯空白：git diff -w 为空，内容等价
+- `llmpool/health_policy_test.go` — 纯空白：git diff -w 为空，内容等价
+- `llmpool/pool.go` — 纯空白：git diff -w 为空，内容等价
+- `llmpool/pool_test.go` — 纯空白：git diff -w 为空，内容等价
+- `llmrec/capture.go` — 纯空白：git diff -w 为空，内容等价
+- `llmrec/capture_test.go` — 纯空白：git diff -w 为空，内容等价
+- `llmrec/llmrec.go` — 差异已逐行读（230 组之一）
+- `llmrec/llmrec_test.go` — 差异已逐行读（230 组之一）
+- `mcphttp/capture_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `mcphttp/client.go` — 差异已逐行读（230 组之一）
+- `mcphttp/client_sse_test.go` — 纯空白：git diff -w 为空，内容等价
+- `notify/channel.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/channels_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/dingtalk.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/email.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/email_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/event.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/feishu.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/filter.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/filter_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/html.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/http.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/http_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/markdown.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/mask.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/mask_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/notify.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/pack_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/redact_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/render.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/render_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/sign_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/ssrf_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/telegram.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/webhook.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/webhook_template_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `notify/wecom.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `report/findings.go` — 差异已逐行读（230 组之一）
+- `report/findings_report_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `report/findings_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `report/helpers.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `report/report.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `reset-password.sh` — 差异已逐行读（230 组之一）
+- `screenshots/.gitkeep` — 两侧字节相同
+- `screenshots/agents.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/assets.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/assets_test.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/chat.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/dashboard.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/findings.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/graph.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/intercept.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/llm.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/logs.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/series-http-auth-settings.jpg` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/series-login.jpg` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/series-session.jpg` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/series-settings-dark.jpg` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/series-tasks.jpg` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/sessions.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/tasks.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/traffic.png` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `screenshots/wx.png` — 两侧字节相同
+- `selfupdate/bootstrap.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `selfupdate/github.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `selfupdate/selfupdate.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `selfupdate/selfupdate_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `selfupdate/stage.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `server/activity_search.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/activity_search_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/activity_stream_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/activity_window_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/assembly.go` — 差异已逐行读（230 组之一）
+- `server/assembly_test.go` — 差异已逐行读（230 组之一）
+- `server/asset_intercept.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `server/asset_templates_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/assets.go` — 差异已逐行读（230 组之一）
+- `server/assets_scope_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/auth.go` — 差异已逐行读（230 组之一）
+- `server/auth_test.go` — 差异已逐行读（230 组之一）
+- `server/broadcast.go` — 差异已逐行读（230 组之一）
+- `server/broadcast_nodes.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/broadcast_nodes_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/builtin_review_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/chat_llm_resolve_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/chat_mentions.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/chat_mentions_test.go` — 差异已逐行读（230 组之一）
+- `server/chatupload.go` — 差异已逐行读（230 组之一）
+- `server/chatupload_cleanup_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/commands.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/constraints_api.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/context_surface_metrics_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/context_tools.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/context_tools_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/conversation_status_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/conversations.go` — 差异已逐行读（230 组之一）
+- `server/core_test.go` — 差异已逐行读（230 组之一）
+- `server/customtool.go` — 差异已逐行读（230 组之一）
+- `server/customtool_capture_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/customtool_metadata_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/customtool_test.go` — 差异已逐行读（230 组之一）
+- `server/customtool_windows_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/dto.go` — 差异已逐行读（230 组之一）
+- `server/engine.go` — 差异已逐行读（230 组之一）
+- `server/engine_cancelcause_test.go` — 差异已逐行读（230 组之一）
+- `server/engine_emptyturn_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/engine_llm_calls_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/engine_timeout.go` — 差异已逐行读（230 组之一）
+- `server/execution_mode.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/execution_mode_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/finding_deletion_feedback_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/finding_report_zip_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `server/finding_retests.go` — 差异已逐行读（230 组之一）
+- `server/finding_retests_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/finding_suppression.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/finding_suppression_review_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/finding_suppression_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/finding_traffic.go` — 差异已逐行读（230 组之一）
+- `server/finding_traffic_export.go` — 差异已逐行读（230 组之一）
+- `server/finding_traffic_test.go` — 差异已逐行读（230 组之一）
+- `server/finding_workflow.go` — 差异已逐行读（230 组之一）
+- `server/finding_workflow_test.go` — 差异已逐行读（230 组之一）
+- `server/findings_groups.go` — 差异已逐行读（230 组之一）
+- `server/findings_groups_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/findings_patch_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/global_proxy.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/global_proxy_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/goals.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/goals_api.go` — 差异已逐行读（230 组之一）
+- `server/goals_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/hint_trigger_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/http_auth.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/http_auth_settings.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/http_auth_settings_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/http_auth_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/inheritance_api_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/inheritance_dto_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/intent_intervention.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/intent_stop.go` — 差异已逐行读（230 组之一）
+- `server/intent_stop_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/intent_user_control_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/intercept.go` — 差异已逐行读（230 组之一）
+- `server/intercept_detail_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/intercept_filter_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/intercept_live_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/intercept_review_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/llmpool.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/llmpool_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/llmrec_raw_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/llmretry.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/llmretry_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/logsink.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/main_execution_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/manager.go` — 差异已逐行读（230 组之一）
+- `server/manager_delete_files_test.go` — 差异已逐行读（230 组之一）
+- `server/manager_lifecycle_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/mcp_runtime.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/mcp_runtime_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/mcp_usage.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/mcp_usage_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/mcpdiscover.go` — 差异已逐行读（230 组之一）
+- `server/mcpdiscover_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/mgmt_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/notifier.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `server/notify_api.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `server/notify_api_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `server/orchestration.go` — 差异已逐行读（230 组之一）
+- `server/planner_asset_search_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/planner_intent_search_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/planner_on_demand_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/planner_revision_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/platform_tools.go` — 差异已逐行读（230 组之一）
+- `server/platform_tools_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/prompt_vars_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/removed_update_routes_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/report_format.go` — 两侧字节相同
+- `server/report_format_test.go` — 两侧字节相同
+- `server/retrieval_examples_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/scheduler.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/server.go` — 差异已逐行读（230 组之一）
+- `server/server_mgmt.go` — 差异已逐行读（230 组之一）
+- `server/shell_execution.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/shell_settings_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/shell_test_api.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/shell_test_api_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/shell_usage.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/shell_usage_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/side_questions.go` — 差异已逐行读（230 组之一）
+- `server/side_questions_test.go` — 差异已逐行读（230 组之一）
+- `server/skill_upload_test.go` — 差异已逐行读（230 组之一）
+- `server/skill_usage.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/skill_zip.go` — 纯空白：git diff -w 为空，内容等价
+- `server/smartproxy.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/sync_scopesentry.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_admission_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/task_archive_package.go` — 差异已逐行读（230 组之一）
+- `server/task_archive_package_test.go` — 差异已逐行读（230 组之一）
+- `server/task_archives.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/task_archives_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/task_asset_approval_types_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_asset_blocking_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_assets.go` — 差异已逐行读（230 组之一）
+- `server/task_categories.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/task_categories_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/task_compactor_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_control.go` — 差异已逐行读（230 组之一）
+- `server/task_control_routes_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/task_delete_barrier_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/task_findings_page.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_findings_page_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_intercept.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_llm.go` — 差异已逐行读（230 组之一）
+- `server/task_llm_test.go` — 差异已逐行读（230 组之一）
+- `server/task_metadata.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/task_metadata_test.go` — 差异已逐行读（230 组之一）
+- `server/task_notifications.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_notifications_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_pause_timeout_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_resolution.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/task_severity_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/task_templates.go` — 差异已逐行读（230 组之一）
+- `server/task_templates_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/testmain_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/tool_calls.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/tool_calls_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/tool_contract_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/tool_documentation_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/tool_execution_boundary_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/tool_usage.go` — 差异已逐行读（230 组之一）
+- `server/tool_usage_test.go` — 差异已逐行读（230 组之一）
+- `server/tools_assembly_helpers_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/tools_context_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/tools_wire_test.go` — 差异已逐行读（230 组之一）
+- `server/trigger_merge_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/triggers.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/update.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `server/update_test.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `server/webui_embed.go` — 差异已逐行读（230 组之一）
+- `server/webui_files.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/webui_files_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/webui_stub.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `server/worker_context_search_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/worker_feedback.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/worker_feedback_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/worker_message_test.go` — 纯空白：git diff -w 为空，内容等价
+- `server/worker_queue.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/worker_queue_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/worker_signal_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/worker_trace_bindings.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/worker_trace_bindings_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `server/workspace.go` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `sidequestion/CONTEXT_BUDGET.md` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `sidequestion/README.md` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `sidequestion/VALIDATION.md` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `sidequestion/capture.go` — 纯空白：git diff -w 为空，内容等价
+- `sidequestion/context.go` — 纯空白：git diff -w 为空，内容等价
+- `sidequestion/context_test.go` — 纯空白：git diff -w 为空，内容等价
+- `sidequestion/request.go` — 纯空白：git diff -w 为空，内容等价
+- `sidequestion/service.go` — 纯空白：git diff -w 为空，内容等价
+- `sidequestion/sidequestion_test.go` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `sidequestion/validation-2026-09-10.json` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `skills/api-recon/SKILL.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/api-recon/reference.md` — 两侧字节相同
+- `skills/api-recon/scripts/build_perm_tree.py` — 两侧字节相同
+- `skills/api-recon/scripts/extract_route_map.py` — 两侧字节相同
+- `skills/api-recon/scripts/harvest_static.py` — 纯空白：git diff -w 为空，内容等价
+- `skills/api-recon/scripts/package-lock.json` — 纯空白：git diff -w 为空，内容等价
+- `skills/api-recon/scripts/package.json` — 纯空白：git diff -w 为空，内容等价
+- `skills/api-recon/scripts/preload.js` — 两侧字节相同
+- `skills/api-recon/scripts/runtime_harvest.js` — 纯空白：git diff -w 为空，内容等价
+- `skills/api-recon/scripts/spider_mpa.py` — 纯空白：git diff -w 为空，内容等价
+- `skills/playwright-cli/SKILL.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/playwright-cli/references/element-attributes.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/playwright-cli/references/playwright-tests.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/playwright-cli/references/request-mocking.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/playwright-cli/references/running-code.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/playwright-cli/references/session-management.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/playwright-cli/references/storage-state.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/playwright-cli/references/test-generation.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/playwright-cli/references/tracing.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/playwright-cli/references/video-recording.md` — 纯空白：git diff -w 为空，内容等价
+- `skills/scopesentry/SKILL.md` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `start.bat` — 差异已逐行读（230 组之一）
+- `start.sh` — 差异已逐行读（230 组之一）
+- `third_party/.DS_Store` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/archive.go` — 差异已逐行读（230 组之一）
+- `traffic/archive_test.go` — 纯空白：git diff -w 为空，内容等价
+- `traffic/compress.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/content_encoding.go` — 两侧字节相同
+- `traffic/content_encoding_test.go` — 差异已逐行读（230 组之一）
+- `traffic/context_review_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/disk_optimization_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/evidence.go` — 差异已逐行读（230 组之一）
+- `traffic/passthrough_test.go` — 纯空白：git diff -w 为空，内容等价
+- `traffic/proxy_test.go` — 纯空白：git diff -w 为空，内容等价
+- `traffic/reclaim_test.go` — 差异已逐行读（230 组之一）
+- `traffic/smartproxy.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/smartproxy_e2e_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/smartproxy_routing_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/smartproxy_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/sync_regression_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/tool_reads.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/tool_reads_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/tool_review_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `traffic/traffic.go` — 差异已逐行读（230 组之一）
+- `traffic/traffic_store_test.go` — 差异已逐行读（230 组之一）
+- `traffic/traffic_test.go` — 差异已逐行读（230 组之一）
+- `traffic/upgrade_test.go` — 纯空白：git diff -w 为空，内容等价
+- `traffic/worker_policy_test.go` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `update.sh` — 差异已逐行读（230 组之一）
+- `web/.gitignore` — 纯空白：git diff -w 为空，内容等价
+- `web/.husky/pre-commit` — 纯空白：git diff -w 为空，内容等价
+- `web/LICENSE` — 纯空白：git diff -w 为空，内容等价
+- `web/biome.json` — 纯空白：git diff -w 为空，内容等价
+- `web/components.json` — 纯空白：git diff -w 为空，内容等价
+- `web/media/dashboard.png` — 两侧字节相同
+- `web/next.config.mjs` — 纯空白：git diff -w 为空，内容等价
+- `web/package-lock.json` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `web/package.json` — 差异已逐行读（230 组之一）
+- `web/postcss.config.mjs` — 纯空白：git diff -w 为空，内容等价
+- `web/public/logo.png` — 纯空白：git diff -w 为空，内容等价
+- `web/public/logo.svg` — 差异已逐行读（230 组之一）
+- `web/public/series-icon.png` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/public/series-icon.svg` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/scripts/test-register.cjs` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(auth)/layout.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(auth)/login/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(auth)/setup/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(external)/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/_components/main-content.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/_components/new-task-shortcut.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/_components/sidebar/account-switcher.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/_components/sidebar/app-sidebar.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/_components/sidebar/change-password-dialog.tsx` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `web/src/app/(main)/_components/sidebar/layout-controls.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/_components/sidebar/nav-documents.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/_components/sidebar/nav-main.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/_components/sidebar/nav-secondary.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/_components/sidebar/nav-user.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/_components/sidebar/search-dialog.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/_components/sidebar/sidebar-support-card.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/_components/sidebar/theme-switcher.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/_components/update-badge.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/chat/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/dashboard/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/assets/page.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/function/commands/page.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/function/findings/_components/asset-tree.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/function/findings/_components/findings-table.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/function/findings/detail/lineage.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/function/findings/detail/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/findings/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/llm-records/page.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/function/sync/page.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/function/tasks/detail/_tabs/asset-approvals-tab.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/function/tasks/detail/_tabs/assets-tab.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/tasks/detail/_tabs/broadcast-tab.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/tasks/detail/_tabs/coverage-graph-tab.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/function/tasks/detail/_tabs/findings-tab.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/tasks/detail/_tabs/graph-tab.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/function/tasks/detail/_tabs/intercept-tab.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/function/tasks/detail/_tabs/overview-tab.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/tasks/detail/_tabs/report-tab.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/function/tasks/detail/_tabs/retests-tab.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/function/tasks/detail/_tabs/sessions-tab.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/tasks/detail/_tabs/smart-proxy-tab.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/function/tasks/detail/_tabs/worker-queue.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/function/tasks/detail/execution-control.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/function/tasks/detail/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/tasks/new/page.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/function/tasks/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/traffic/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/function/workspace/page.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/layout.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/system/agents/_components/agents-settings.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/agents/detail/page.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/system/agents/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/system/intercept/_components/intercept-settings.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/intercept/approvals/page.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/(main)/system/intercept/assets/page.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/intercept/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/system/llm/_components/llm-settings.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/llm/_components/retry.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/system/llm/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/system/logs/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/system/mcp/_components/mcp-settings.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/mcp/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/system/notify/_components/channel-fields.ts` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/notify/_components/channel-form.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/notify/_components/delivery-list.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/notify/_components/stat-tile.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/notify/page.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/settings/_components/general-settings.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/settings/_components/http-auth-card.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/settings/_components/update-card.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/settings/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/system/skills/_components/skills-settings.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/skills/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/(main)/system/tools/_components/tools-settings.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/app/(main)/system/tools/page.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/favicon.ico` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/globals.css` — 差异已逐行读（230 组之一）
+- `web/src/app/icon.png` — 纯空白：git diff -w 为空，内容等价
+- `web/src/app/layout.tsx` — 差异已逐行读（230 组之一）
+- `web/src/app/not-found.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/agent-editor.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/approval-execution-focus.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/approval-records.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/asset-approval-template.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/asset-dsl-search.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/asset-intercept-rules-editor.tsx` — ARTEX 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/calendar/event-calendar-views.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/copy-button.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/date-range-picker.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/exploration-graph.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/finding-delete-dialog.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/finding-detail-content.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/finding-pagination.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/finding-presentation.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/finding-retest-dialog.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/finding-retest-panel.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/finding-selector.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/finding-suppression-rules.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/finding-traffic-panel.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/findings-toolbar.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/http-code-block.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/link-traffic-dialog.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/markdown.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/mention-textarea.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/scope-text-editor.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/session-search.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/session-tool-calls.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/settings/appearance-settings.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/settings/settings-context.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/settings/settings-workspace.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/side-question-workspace.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/simple-icon.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/source-transcript.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/status-badge.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/table-pagination.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/task-llm-profile-chain.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/task-notifications.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/task-template-controls.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/tasks/task-creation-form.tsx` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/components/todo-popover.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/traffic-evidence-viewer.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/traffic-picker-dialog.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/transcript.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/accordion.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/alert-dialog.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/alert.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/aspect-ratio.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/attachment.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/avatar.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/badge.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/breadcrumb.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/bubble.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/button-group.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/button.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/calendar.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/card.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/carousel.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/chart.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/checkbox.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/collapsible.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/combobox.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/command.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/context-menu.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/dialog.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/direction.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/drawer.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/dropdown-menu.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/empty.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/field.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/hover-card.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/input-group.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/input-otp.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/input.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/item.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/kbd.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/label.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/marker.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/menubar.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/message-scroller.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/message.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/native-select.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/navigation-menu.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/pagination.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/popover.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/progress.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/radio-group.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/resizable.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/scroll-area.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/select.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/separator.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/sheet.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/sidebar.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/skeleton.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/slider.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/sonner.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/sortable-head.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/spinner.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/switch.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/table.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/tabs.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/textarea.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/components/ui/toggle-group.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/toggle.tsx` — 差异已逐行读（230 组之一）
+- `web/src/components/ui/tooltip.tsx` — 差异已逐行读（230 组之一）
+- `web/src/config/app-config.ts` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `web/src/hooks/use-current-user.ts` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `web/src/hooks/use-lg.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/hooks/use-mobile.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/hooks/use-side-questions.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/activity-highlight.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/activity-merge.test.mjs` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/activity-merge.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/api.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/auth.ts` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `web/src/lib/chat-mentions.test.mjs` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/chat-mentions.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/chat-send-mode.ts` — 重命名/品牌化：diff 已逐条核验，仅模块路径与品牌名变化
+- `web/src/lib/company-scope.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/cookie.client.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/exploration-graph.test.mjs` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/exploration-graph.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/findings.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/findings.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/fonts/registry.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/http-auth.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/http-auth.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/local-storage.client.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/mcp-import.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mcp-import.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/activity-search.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/approval-execution.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/asset-approval-templates.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/asset-origins.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/broadcast.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/context-tools.json` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/context-tools.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/data.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/mock/enabled.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/mock/execution-mode.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/finding-deletion.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/finding-export.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/finding-filters.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/finding-suppression.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/finding-traffic.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/handler.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/mock/http-auth.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/shell-tools.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/task-notifications.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/task-severity.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/tool-calls.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/traffic.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/traffic.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/upstream-sync.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/worker-cancel.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/worker-queue.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/mock/workspace.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/polling.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/polling.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/preferences/layout-utils.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/preferences/layout.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/preferences/preferences-config.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/preferences/preferences-storage.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/preferences/theme-utils.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/preferences/theme.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/side-questions.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/side-questions.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/sort-preference.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/status.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/task-assets.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/task-notifications.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/task-notifications.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/tool-calls.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/tool-calls.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/types.ts` — 差异已逐行读（230 组之一）
+- `web/src/lib/utils.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/lib/worker-feedback.test.mjs` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/worker-feedback.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/workspace-navigation.test.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/lib/workspace-navigation.ts` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/navigation/sidebar/sidebar-items.ts` — 差异已逐行读（230 组之一）
+- `web/src/proxy.disabled.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/proxy.ts` — 差异已逐行读（230 组之一）
+- `web/src/scripts/generate-theme-presets.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/scripts/theme-boot.tsx` — 差异已逐行读（230 组之一）
+- `web/src/stores/preferences/preferences-provider.tsx` — 纯空白：git diff -w 为空，内容等价
+- `web/src/stores/preferences/preferences-store.ts` — 纯空白：git diff -w 为空，内容等价
+- `web/src/styles/control-radius.css` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/src/styles/flag-icons/flags.css` — 纯空白：git diff -w 为空，内容等价
+- `web/src/styles/presets/brutalist.css` — 差异已逐行读（230 组之一）
+- `web/src/styles/presets/soft-pop.css` — 差异已逐行读（230 组之一）
+- `web/src/styles/presets/tangerine.css` — 差异已逐行读（230 组之一）
+- `web/tests/asset-source-retry.cjs` — SERIES 独有：正文已读（10 路并行，2026-11-02）
+- `web/tsconfig.json` — 纯空白：git diff -w 为空，内容等价
+- `web/tsconfig.scripts.json` — 纯空白：git diff -w 为空，内容等价

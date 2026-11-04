@@ -23,10 +23,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/skill"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
 )
 
 // validSkillName checks the agentskills.io name constraints, widened so a skill can
@@ -753,15 +753,16 @@ func (s *Server) pgListTools(w http.ResponseWriter, r *http.Request) {
 	if ts == nil {
 		ts = []*db.Tool{}
 	}
-	// Usage is best-effort decoration. Runtime tool resolution keeps using the plain
-	// catalog query, so agent assembly never pays for this aggregate.
+	// Runtime resolution uses the plain catalog query. The management API must
+	// surface aggregation failures instead of presenting unavailable totals as zero.
 	counts, countErr := pg.ToolUsageCounts()
 	if countErr != nil {
 		log.Printf("[tools] 读取调用统计失败: %v", countErr)
-	} else {
-		for _, tool := range ts {
-			tool.Calls = counts[tool.Key]
-		}
+		writeErr(w, 500, "读取工具调用统计失败")
+		return
+	}
+	for _, tool := range ts {
+		tool.Calls = counts[tool.Key]
 	}
 	writeJSON(w, 200, map[string]any{"tools": ts})
 }
@@ -866,8 +867,12 @@ func (s *Server) pgSaveMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var m db.MCPServer
-	if err := decode(r, &m); err != nil {
-		writeErr(w, 400, err.Error())
+	if err := decodeMCPBody(w, r, &m); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if err := normalizeMCPServer(&m); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	isNew := m.ID == 0
@@ -888,6 +893,155 @@ func (s *Server) pgSaveMCP(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}
 	writeJSON(w, 200, map[string]any{"id": id})
+}
+
+const maxMCPRequestBody = 1 << 20
+
+func decodeMCPBody(w http.ResponseWriter, r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxMCPRequestBody)
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(v); err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			return fmt.Errorf("请求正文过大")
+		}
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err == nil {
+		return fmt.Errorf("invalid JSON: multiple values")
+	} else if !errors.Is(err, io.EOF) {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	return nil
+}
+
+type mcpTestTool struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+func (s *Server) pgTestMCP(w http.ResponseWriter, r *http.Request) {
+	var m db.MCPServer
+	if err := decodeMCPBody(w, r, &m); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	started := time.Now()
+	tools, err := discoverMCP(ctx, &m)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":    false,
+			"error": mcpDiscoveryErrorMessage(ctx, err),
+		})
+		return
+	}
+	out := make([]mcpTestTool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, mcpTestTool{Name: t.Name, Description: t.Description})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"tool_count": len(out),
+		"tools":      out,
+		"latency_ms": time.Since(started).Milliseconds(),
+	})
+}
+
+type mcpImportServer struct {
+	Name      string          `json:"name"`
+	Transport string          `json:"transport"`
+	Type      string          `json:"type"`
+	Command   string          `json:"command"`
+	Args      json.RawMessage `json:"args"`
+	Env       json.RawMessage `json:"env"`
+	URL       string          `json:"url"`
+	Enabled   *bool           `json:"enabled"`
+}
+
+type mcpImportRequest struct {
+	Servers []mcpImportServer `json:"servers"`
+}
+
+func (in mcpImportServer) normalized() (*db.MCPServer, error) {
+	transport := strings.ToLower(strings.TrimSpace(in.Transport))
+	if transport == "" {
+		switch strings.ToLower(strings.TrimSpace(in.Type)) {
+		case "local", "stdio":
+			transport = "stdio"
+		case "sse":
+			transport = "sse"
+		case "http", "streamable-http":
+			transport = "http"
+		}
+	}
+	if transport == "" && strings.TrimSpace(in.URL) != "" {
+		transport = "http"
+	}
+	enabled := true
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	m := &db.MCPServer{
+		Name:      in.Name,
+		Transport: transport,
+		Command:   in.Command,
+		Args:      in.Args,
+		Env:       in.Env,
+		URL:       in.URL,
+		Enabled:   enabled,
+	}
+	if err := normalizeMCPServer(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (s *Server) pgImportMCP(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	var req mcpImportRequest
+	if err := decodeMCPBody(w, r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if len(req.Servers) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "servers 不能为空"})
+		return
+	}
+	servers := make([]*db.MCPServer, 0, len(req.Servers))
+	for i, raw := range req.Servers {
+		m, err := raw.normalized()
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": fmt.Sprintf("servers[%d]: %s", i, err)})
+			return
+		}
+		servers = append(servers, m)
+	}
+	results, err := pg.ImportMCP(servers)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	// Discovery deliberately runs after the response transaction on the server
+	// context, so a browser disconnect cannot cancel newly imported MCP checks.
+	for _, m := range servers {
+		if !m.Enabled {
+			continue
+		}
+		m := m
+		go func() {
+			ctx, cancel := context.WithTimeout(s.ctx, 90*time.Second)
+			defer cancel()
+			if err := s.discoverAndCacheMCP(ctx, m); err != nil {
+				log.Printf("[mcp] 导入后工具发现 %s 失败: %v", m.Name, err)
+			}
+		}()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": results})
 }
 
 func (s *Server) pgDeleteMCP(w http.ResponseWriter, r *http.Request) {
@@ -953,6 +1107,30 @@ func (s *Server) pgMCPTools(w http.ResponseWriter, r *http.Request) {
 		tools = []db.MCPTool{}
 	}
 	writeJSON(w, 200, map[string]any{"tools": tools})
+}
+
+func (s *Server) pgMCPUsage(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeErr(w, 400, "bad MCP id")
+		return
+	}
+	stats, err := pg.MCPToolUsageStats(id)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	calls, err := pg.RecentMCPCalls(id, limit)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"stats": stats, "calls": calls})
 }
 
 // ---------- skills (文件系统) ----------
@@ -1526,14 +1704,17 @@ func skillRelPath(file string) (string, string) {
 		return "", "invalid path: '..' not allowed"
 	}
 	// 3. Reject leading slash and empty segments (double slash).
-	//    Leading slash would survive filepath.Clean as an absolute path.
+	//    Leading slash would survive Clean as an absolute path.
 	if strings.HasPrefix(file, "/") || strings.Contains(file, "//") {
 		return "", "invalid path: must be relative with no empty segments"
 	}
 	// 4. Normalize and final safety re-check after Clean.
-	//    filepath.Clean removes redundant separators and resolves single dots.
-	clean := filepath.Clean(file)
-	if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+	//    path.Clean (not filepath.Clean): the client always sends "/" separated
+	//    paths, and filepath would rewrite them to "\" on Windows — which the
+	//    character check above then rejects on the next round trip (read/save of
+	//    files in subdirectories failed with "illegal character '\\'").
+	clean := path.Clean(file)
+	if clean == "." || path.IsAbs(clean) || strings.HasPrefix(clean, "..") {
 		return "", "invalid path"
 	}
 	return clean, ""
@@ -1542,6 +1723,9 @@ func skillRelPath(file string) (string, string) {
 // walkSkillFiles returns all files under root (relative to root), sorted,
 // including files in subdirectories (scripts/, references/, assets/, etc.).
 // walkSkillFiles returns all entries under root relative to root.
+// Paths are always "/" separated (filepath.ToSlash) so the client gets a stable
+// format on every OS: on Windows filepath.Rel yields "scripts\run.sh", which the
+// client would send back and skillRelPath would reject as an illegal character.
 // Directories are included with a trailing "/" so the frontend can distinguish
 // them from files and render empty folders in the tree.
 func walkSkillFiles(root string) ([]string, error) {
@@ -1554,6 +1738,7 @@ func walkSkillFiles(root string) ([]string, error) {
 		if relErr != nil || rel == "." {
 			return nil
 		}
+		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			entries = append(entries, rel+"/")
 		} else {

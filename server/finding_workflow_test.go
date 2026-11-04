@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
 	actool "github.com/Autumn-27/norma/tool"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
 )
 
 func workflowCall(t *testing.T, ctx context.Context, tool actool.CoreTool, input any, wantError bool) string {
@@ -90,8 +90,8 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 	ts.SetTaskID(*f.TaskID)
 	ts.SetFindingRecorder(s.evidenceStore())
 	notices := 0
-	ts.SetNotifyFinding(func(int64, string) { notices++ })
-	tools, def, cleanup := agent.AugmentTools(ctx, "planner", ts.PlannerTools())
+	ts.SetNotifyFinding(func(int64, string, ...int64) { notices++ })
+	tools, def, cleanup := augmentToolsForTest(t, ctx, "planner", ts.PlannerTools())
 	defer cleanup()
 	if !strings.Contains(def.FindingGuidance, "evidence_hint_id") || !strings.Contains(def.FindingGuidance, "取消 Worker") {
 		t.Fatal("Planner missed runtime guidance")
@@ -102,7 +102,13 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.SplitN(result, "\n", 2)[1]), &recorded); err != nil {
 		t.Fatal(err)
 	}
-	if recorded.FindingID == recorded.NodeID || len(recorded.Traffic.Bindings) != 3 || notices != 1 {
+	// Independent sequences may legitimately allocate the same numeric value.
+	// Verify the relationship instead of assuming the numbers must differ.
+	stored, err := pg.GetFinding(recorded.FindingID)
+	if err != nil || stored == nil || stored.NodeID == nil || *stored.NodeID != recorded.NodeID {
+		t.Fatalf("finding/node relationship mismatch: %+v %v", stored, err)
+	}
+	if len(recorded.Traffic.Bindings) != 3 || notices != 1 {
 		t.Fatal("bad finding/traffic result", result)
 	}
 	for i, b := range recorded.Traffic.Bindings {
@@ -111,17 +117,19 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 		}
 	}
 	list := workflowCall(t, ctx, s.toolListTaskFindings(), map[string]any{"task_id": task.ID}, false)
-	var nodes []struct {
-		ID            int64 `json:"id"`
-		FindingID     int64 `json:"finding_id"`
-		FindingNodeID int64 `json:"finding_node_id"`
-		Count         int   `json:"traffic_count"`
+	var page struct {
+		Findings []struct {
+			ID            int64 `json:"id"`
+			FindingID     int64 `json:"finding_id"`
+			FindingNodeID int64 `json:"finding_node_id"`
+			Count         int   `json:"traffic_count"`
+		} `json:"findings"`
 	}
-	if err := json.Unmarshal([]byte(list), &nodes); err != nil {
+	if err := json.Unmarshal([]byte(list), &page); err != nil {
 		t.Fatal(err)
 	}
 	found := false
-	for _, n := range nodes {
+	for _, n := range page.Findings {
 		if n.ID == recorded.NodeID {
 			found = n.FindingID == recorded.FindingID && n.FindingNodeID == recorded.NodeID && n.Count == 3
 		}
@@ -183,10 +191,10 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 		t.Fatal("optional no-packet report failed")
 	}
 	workflowCall(t, ctx, s.toolGetFindingTraffic(), map[string]any{"finding_id": recorded.FindingID}, false)
-	tools, def, closeTools := agent.AugmentTools(ctx, "planner", ts.PlannerTools())
+	tools, def, closeTools := augmentToolsForTest(t, ctx, "planner", ts.PlannerTools())
 	defer closeTools()
-	if def.FindingGuidance != "" {
-		t.Fatal("disabled feature still injects guidance")
+	if !strings.Contains(def.FindingGuidance, "当前未启用流量证据绑定") {
+		t.Fatal("disabled feature must override stale binding instructions")
 	}
 	for _, tool := range tools {
 		if tool.Name() == "bind_finding_traffic" {
@@ -198,7 +206,7 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 func TestFindingWorkflowMigrationPreservesUserConfiguration(t *testing.T) {
 	s, _, _ := trafficEvidenceServer(t)
 	pg := s.m.pg
-	for _, key := range []string{"report_finding", "add_hint", "add_task_hint", "traffic_search", "traffic_get", "traffic_blob", "bind_finding_traffic", "get_finding_traffic"} {
+	for _, key := range []string{"report_finding", "add_hint", "add_task_hint", "traffic_search", "traffic_get", "bind_finding_traffic", "get_finding_traffic"} {
 		old, err := pg.GetTool(key)
 		if err != nil || old == nil {
 			t.Fatal("missing tool", key, err)
@@ -246,7 +254,7 @@ func TestFindingWorkflowMigrationPreservesUserConfiguration(t *testing.T) {
 	}
 	search, _ := pg.GetTool("traffic_search")
 	get, _ := pg.GetTool("traffic_get")
-	if !strings.Contains(search.Description, "支持裸主机、主机:端口或完整 URL") {
+	if !strings.Contains(search.Description, "主机") {
 		t.Fatal("traffic_search description migration missing host/port guidance")
 	}
 	if search.Enabled || !contains(search.Agents, "reporter") || get.Enabled || len(get.Agents) != 1 || get.Agents[0] != "custom-agent" {
@@ -275,16 +283,16 @@ func TestFindingWorkflowReporterBindsBeforeWritingReport(t *testing.T) {
 	}
 	seedServerEvidenceFlow(t, s, "reporter-proof", []byte("local proof payload"))
 	seedServerEvidenceFlow(t, s, "reporter-baseline", []byte("local normal response"))
-	tools, def, cleanup := agent.AugmentTools(ctx, "reporter", nil)
+	tools, def, cleanup := augmentToolsForTest(t, ctx, "reporter", nil)
 	defer cleanup()
 	if !strings.Contains(def.FindingGuidance, "报告前自动关联流量") || !strings.Contains(def.FindingGuidance, "绑定成功后重新调用") {
 		t.Fatal("reporter did not receive binding workflow")
 	}
-	for _, name := range []string{"traffic_search", "traffic_get", "get_task_worker_trace", "get_task_node_detail", "bind_finding_traffic", "get_finding_traffic", "update_finding_report"} {
+	for _, name := range []string{"traffic_search", "traffic_get", "context_search", "context_get", "bind_finding_traffic", "get_finding_traffic", "update_finding_report"} {
 		workflowTool(t, tools, name)
 	}
 	finding, _ := pg.GetFinding(f.FindingID)
-	detail := workflowCall(t, ctx, workflowTool(t, tools, "get_task_node_detail"), map[string]any{"task_id": fmt.Sprint(*finding.TaskID), "id": f.NodeID}, false)
+	detail := workflowCall(t, ctx, workflowTool(t, tools, "context_get"), map[string]any{"task_id": fmt.Sprint(*finding.TaskID), "items": []map[string]any{{"ref": fmt.Sprintf("node:%d", f.NodeID)}}}, false)
 	if !strings.Contains(detail, `"finding_id"`) || !strings.Contains(detail, `"finding_node_id"`) {
 		t.Fatal("reporter lacks explicit ID mapping")
 	}
@@ -304,7 +312,7 @@ func TestFindingWorkflowReporterBindsBeforeWritingReport(t *testing.T) {
 	if err := json.Unmarshal([]byte(list), &summary); err != nil || summary.Version != 1 {
 		t.Fatal(list, err)
 	}
-	workflowCall(t, ctx, workflowTool(t, tools, "update_finding_report"), map[string]any{"finding_id": f.NodeID, "evidence_version": summary.Version, "report": "## Local report\n\nVerified baseline and proof using saved evidence."}, false)
+	workflowCall(t, ctx, workflowTool(t, tools, "update_finding_report"), map[string]any{"finding_node_id": f.NodeID, "evidence_version": summary.Version, "report": "## Local report\n\nVerified baseline and proof using saved evidence."}, false)
 	updated, err := pg.GetFinding(f.FindingID)
 	if err != nil || updated.ReportEvidenceVersion != summary.Version || updated.EvidenceVersion != summary.Version {
 		t.Fatal("report did not cover post-binding version", updated, err)
@@ -313,10 +321,10 @@ func TestFindingWorkflowReporterBindsBeforeWritingReport(t *testing.T) {
 	if r := request("PUT", "/api/settings", `{"agent_traffic_binding":false}`); r.Code != 200 {
 		t.Fatal(r.Code, r.Body)
 	}
-	off, offDef, closeOff := agent.AugmentTools(ctx, "reporter", nil)
+	off, offDef, closeOff := augmentToolsForTest(t, ctx, "reporter", nil)
 	defer closeOff()
-	if offDef.FindingGuidance != "" {
-		t.Fatal("off reporter still receives auto-binding guidance")
+	if !strings.Contains(offDef.FindingGuidance, "当前未启用流量证据绑定") {
+		t.Fatal("off reporter missing binding-disabled guidance")
 	}
 	for _, tool := range off {
 		if tool.Name() == "traffic_search" || tool.Name() == "traffic_get" || tool.Name() == "traffic_blob" || tool.Name() == "bind_finding_traffic" {

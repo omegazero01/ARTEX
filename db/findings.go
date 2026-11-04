@@ -15,6 +15,8 @@ import (
 // DBFinding is a row in the standalone findings table. It persists across task
 // deletion unless the caller explicitly requests related finding cleanup.
 type DBFinding struct {
+	Reproduction json.RawMessage // details/export only; never loaded by list queries
+
 	TrafficCount          int
 	EvidenceVersion       int64
 	ReportEvidenceVersion int64
@@ -31,7 +33,8 @@ type DBFinding struct {
 	Worker          string
 	AssetIDs        []int64
 	Status          string
-	Report          string // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
+	Report          string // 人类提交版(Markdown);仅详情/导出填充,列表查询不带
+	ReportDetail    string // 完整技术明细(Markdown);供 context_search 与内部复盘,不导出
 	CreatedAt       time.Time
 	TaskDescription string // populated via LEFT JOIN on tasks
 }
@@ -150,12 +153,13 @@ func (d *DB) ListFindings(limit int) ([]*DBFinding, error) {
 // filter on that column". Sort is "severity" (severity desc, then newest) or
 // anything else (newest first).
 type FindingFilter struct {
-	Severity  string // high | medium | low
-	Status    string // pending | false_positive | ignored | resolved
-	VulnClass string
-	TaskID    string // 任务 id(字符串形式;空/非法 = 不按任务筛选)
-	Query     string // 名称/类型/摘要/证据/报告正文的模糊检索关键词
-	Sort      string // "severity" | "time"
+	SummaryOnly bool   // Management selector: defer evidence/report bodies to detail.
+	Severity    string // high | medium | low
+	Status      string // pending | false_positive | ignored | resolved
+	VulnClass   string
+	TaskID      string // 任务 id(字符串形式;空/非法 = 不按任务筛选)
+	Query       string // 名称/类型/摘要/证据/报告正文的模糊检索关键词
+	Sort        string // "severity" | "time"
 	// AssetScope 是资产树的节点 key(a:<id> / c:<id> / r:<domain> / __none__),
 	// 选中一个节点等于选中它的整棵子树。空 = 不按资产筛选。
 	AssetScope string
@@ -262,12 +266,16 @@ func (d *DB) ListFindingsPage(f FindingFilter, page, pageSize int) ([]*DBFinding
 		order = `CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC, f.created_at DESC, f.id DESC`
 	}
 	pageArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
+	cols := findingSelectCols
+	if f.SummaryOnly {
+		cols = strings.Replace(cols, "f.evidence,", "'' AS evidence,", 1)
+	}
 	q := fmt.Sprintf(`
 		SELECT %s
 		FROM findings f
 		LEFT JOIN tasks t ON f.task_id = t.id%s
 		ORDER BY %s
-		LIMIT $%d OFFSET $%d`, findingSelectCols, where, order, len(args)+1, len(args)+2)
+		LIMIT $%d OFFSET $%d`, cols, where, order, len(args)+1, len(args)+2)
 	rows, err := d.Query(q, pageArgs...)
 	if err != nil {
 		return nil, 0, err
@@ -471,7 +479,7 @@ RETURNING id, created_at`, s.expID, audit.NodeID, utf8Clean(audit.Worker), utf8C
 // 再按时间倒序,与「导出汇总报告」的分组顺序一致。
 func (d *DB) ListFindingsForExport(f FindingFilter, ids []int64) ([]*DBFinding, error) {
 	const order = `ORDER BY CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC, f.created_at DESC`
-	cols := findingSelectCols + `, COALESCE(f.report, '')`
+	cols := findingSelectCols + `, COALESCE(f.report, ''), COALESCE(f.report_detail, ''), COALESCE(f.reproduction, 'null'::jsonb)`
 
 	var q string
 	var args []any
@@ -511,7 +519,7 @@ func (d *DB) ListFindingsForExport(f FindingFilter, ids []int64) ([]*DBFinding, 
 		var aidsJSON string
 		if err := rows.Scan(&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 			&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
-			&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report); err != nil {
+			&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report, &f.ReportDetail, &f.Reproduction); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
@@ -633,13 +641,13 @@ func (d *DB) FindingStats() (*FindingStats, error) {
 func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 	f := &DBFinding{}
 	var aidsJSON string
-	err := d.QueryRow(`SELECT `+findingSelectCols+`, COALESCE(f.report, '')
+	err := d.QueryRow(`SELECT `+findingSelectCols+`, COALESCE(f.report, ''), COALESCE(f.report_detail, ''), COALESCE(f.reproduction, 'null'::jsonb)
 		FROM findings f
 		LEFT JOIN tasks t ON f.task_id = t.id
 		WHERE f.id = $1`, id).Scan(
 		&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 		&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
-		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report)
+		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report, &f.ReportDetail, &f.Reproduction)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -650,18 +658,73 @@ func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 	return f, nil
 }
 
+// FindingAccessMetadata fetches only authorization inputs, not potentially
+// large reports/evidence or unrelated traffic counts.
+func (d *DB) FindingAccessMetadata(ctx context.Context, id int64) (*DBFinding, error) {
+	f := &DBFinding{}
+	var assets []byte
+	err := d.QueryRowContext(ctx, `SELECT id,task_id,node_id,asset_ids FROM findings WHERE id=$1`, id).
+		Scan(&f.ID, &f.TaskID, &f.NodeID, &assets)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(assets, &f.AssetIDs); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
 // DeleteFinding removes a finding entirely: the standalone findings row and its
 // originating exploration node (kind='finding'), so it disappears from the findings
 // list, the per-task 发现 Tab, and the exploration graph alike. Deleting the node
 // cascades its edges + node_assets and nulls any activity referencing it. Returns
 // rows affected (0 = no finding with that id).
-func (d *DB) DeleteFinding(id int64) (n int64, err error) {
+func (d *DB) DeleteFinding(id int64) (int64, error) {
+	n, _, err := d.deleteFinding(id, nil)
+	return n, err
+}
+
+func (d *DB) deleteFinding(id int64, reason *string) (n int64, feedback *FindingDeletionFeedback, err error) {
 	err = d.WithEvidenceTx(context.Background(), func(tx *sql.Tx) error {
 		if err := LockFindingEvidenceTx(tx, id, nil); err != nil {
 			if errors.Is(err, ErrFindingNotFound) {
 				return nil
 			}
 			return err
+		}
+		if reason != nil {
+			feedback = &FindingDeletionFeedback{}
+			if err := tx.QueryRow(`INSERT INTO finding_deletion_feedback(finding_id,task_id,title,vulnclass,reason)
+ SELECT f.id,t.id,left(f.name,500),left(f.vulnclass,200),$2 FROM findings f
+ LEFT JOIN tasks t ON t.id=f.task_id AND t.deleted_at IS NULL WHERE f.id=$1
+ RETURNING id,finding_id,task_id,title,vulnclass,reason,deleted_at`, id, *reason).Scan(&feedback.ID, &feedback.FindingID, &feedback.TaskID, &feedback.Title, &feedback.VulnClass, &feedback.Reason, &feedback.DeletedAt); err != nil {
+				return err
+			}
+		}
+		if feedback != nil && feedback.TaskID != nil {
+			var rawIDs []byte
+			if err := tx.QueryRow(`SELECT asset_ids FROM findings WHERE id=$1`, id).Scan(&rawIDs); err != nil {
+				return err
+			}
+			var ids []int64
+			if err := json.Unmarshal(rawIDs, &ids); err != nil {
+				return err
+			}
+			targets, err := findingTargets(context.Background(), tx, ids)
+			if err != nil {
+				return err
+			}
+			rawTargets, err := json.Marshal(targets)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`INSERT INTO finding_suppression_rules(feedback_id,task_id,title,vulnclass,summary,asset_ids,reason,targets)
+ SELECT $2,f.task_id,f.name,f.vulnclass,f.summary,f.asset_ids,$3,$4 FROM findings f WHERE f.id=$1`, id, feedback.ID, feedback.Reason, string(rawTargets)); err != nil {
+				return err
+			}
 		}
 		var nodeID sql.NullInt64
 		if err := tx.QueryRow(`DELETE FROM findings WHERE id=$1 RETURNING node_id`, id).Scan(&nodeID); err != nil {
@@ -690,44 +753,70 @@ func (d *DB) DeleteFindingsByTask(taskID int64) (int64, error) {
 }
 
 // SetFindingStatus updates one finding's triage state. Returns rows affected.
-//
-// 底层 setter：只改状态、不登记推送事件。生产代码改状态请走
-// SetFindingStatusWithNotify —— 直接调本函数会让「状态变更推送」静默失效。
-// 保留它是为了让不关心通知的用例（参数校验、复测流程）能单独驱动状态。
 func (d *DB) SetFindingStatus(id int64, status string) (int64, error) {
-	res, err := d.Exec(`UPDATE findings SET status=$1 WHERE id=$2`, status, id)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return d.PatchFinding(id, FindingPatch{Status: &status})
 }
 
 // SetFindingReportByNodeID sets the Markdown report on the standalone finding row
 // whose node_id matches — report_finding returns that node id, so an agent tool
-// can address the finding it just created. Returns rows affected (0 when no row).
+// can address the finding it just created. The legacy helper mirrors the report
+// into both the human submission and the technical-detail field.
 func (d *DB) SetFindingReportByNodeID(nodeID int64, report string) (int64, error) {
-	return d.SetFindingReportVersionByNodeID(context.Background(), nodeID, report, nil)
+	return d.SetFindingReportVersionByNodeID(context.Background(), nodeID, report, report, nil)
 }
 
-// setFindingCol updates one text column on the standalone finding row AND mirrors
-// the new value into the originating exploration node's payload under jsonKey, so the
-// per-task 发现 Tab (which reads the node payload, not this table) stays in sync.
-// Returns rows affected (0 when no finding has that id); the node sync is best-effort.
-// col and jsonKey MUST be trusted constants (they are interpolated into SQL) — never
-// pass user input.
-func (d *DB) setFindingCol(id int64, col, jsonKey, val string) (int64, error) {
+// FindingPatch distinguishes omitted fields from explicit empty values.
+type FindingPatch struct {
+	Status    *string `json:"status"`
+	Severity  *string `json:"severity"`
+	Name      *string `json:"name"`
+	VulnClass *string `json:"vulnclass"`
+}
+
+// PatchFinding atomically updates triage fields and the graph projection.
+// Triage status is not a graph node state. Payload edits invalidate cold digests.
+func (d *DB) PatchFinding(id int64, p FindingPatch) (int64, error) {
+	if p.Status != nil && !ValidFindingStatus(*p.Status) {
+		return 0, fmt.Errorf("bad status: %s", *p.Status)
+	}
+	if p.Severity != nil && !ValidSeverity(*p.Severity) {
+		return 0, fmt.Errorf("bad severity: %s", *p.Severity)
+	}
+	changes := map[string]string{}
+	for key, value := range map[string]*string{"severity": p.Severity, "name": p.Name, "vulnclass": p.VulnClass} {
+		if value != nil {
+			changes[key] = *value
+		}
+	}
+	payload, err := json.Marshal(changes)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := d.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
 	var nodeID *int64
-	err := d.QueryRow(`UPDATE findings SET `+col+`=$1 WHERE id=$2 RETURNING node_id`, val, id).Scan(&nodeID)
+	err = tx.QueryRow(`UPDATE findings SET status=COALESCE($2,status),
+		severity=COALESCE($3,severity), name=COALESCE($4,name),
+		vulnclass=COALESCE($5,vulnclass) WHERE id=$1 RETURNING node_id`,
+		id, p.Status, p.Severity, p.Name, p.VulnClass).Scan(&nodeID)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
 	if err != nil {
 		return 0, err
 	}
-	if nodeID != nil {
-		_, _ = d.Exec(`UPDATE exploration_nodes
-			SET payload = jsonb_set(payload, '{`+jsonKey+`}', to_jsonb($1::text))
-			WHERE id = $2`, val, *nodeID)
+	if nodeID != nil && len(changes) > 0 {
+		if _, err := tx.Exec(`UPDATE exploration_nodes
+			SET payload=payload || $1::jsonb, content_version=content_version+1
+			WHERE id=$2 AND payload IS DISTINCT FROM payload || $1::jsonb`, string(payload), *nodeID); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 	return 1, nil
 }
@@ -735,18 +824,18 @@ func (d *DB) setFindingCol(id int64, col, jsonKey, val string) (int64, error) {
 // SetFindingSeverity updates one finding's severity (+ node payload sync). Returns
 // rows affected (0 when no finding has that id).
 func (d *DB) SetFindingSeverity(id int64, severity string) (int64, error) {
-	return d.setFindingCol(id, "severity", "severity", severity)
+	return d.PatchFinding(id, FindingPatch{Severity: &severity})
 }
 
 // SetFindingName updates one finding's 漏洞名称 (+ node payload sync). Empty name is
 // allowed — the frontend falls back to the vuln class for display.
 func (d *DB) SetFindingName(id int64, name string) (int64, error) {
-	return d.setFindingCol(id, "name", "name", name)
+	return d.PatchFinding(id, FindingPatch{Name: &name})
 }
 
 // SetFindingVulnClass updates one finding's 漏洞类别 (+ node payload sync).
 func (d *DB) SetFindingVulnClass(id int64, vulnclass string) (int64, error) {
-	return d.setFindingCol(id, "vulnclass", "vulnclass", vulnclass)
+	return d.PatchFinding(id, FindingPatch{VulnClass: &vulnclass})
 }
 
 // FindingMeta is the standalone-row data (id, triage state, anchored assets) the

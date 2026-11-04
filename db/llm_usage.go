@@ -13,17 +13,26 @@ import (
 // only the dimensions needed to slice token spend (model / profile / task / agent),
 // never any prompt or response content.
 type LLMUsage struct {
-	TaskID        string `json:"task_id"`        // task registry id (matches llm_records.task_id)
-	ExplorationID int64  `json:"exploration_id"` // exploration id parsed from the session (0 = unknown/non-task)
-	Worker        string `json:"worker"`         // agent lane: worker / planner / mainagent / goals
-	Model         string `json:"model"`
-	ProfileName   string `json:"profile_name"`
-	LatencyMs     int    `json:"latency_ms"`
-	InputTokens   int    `json:"input_tokens"`
-	OutputTokens  int    `json:"output_tokens"`
-	CacheRead     int    `json:"cache_read"`
-	CacheWrite    int    `json:"cache_write"`
-	Status        string `json:"status"` // ok | error
+	TaskID               string `json:"task_id"`        // task registry id (matches llm_records.task_id)
+	ExplorationID        int64  `json:"exploration_id"` // exploration id parsed from the session (0 = unknown/non-task)
+	IntentID             int64  `json:"intent_id"`      // worker intent node; 0 for planner/main/chat
+	Worker               string `json:"worker"`         // agent lane: worker / planner / mainagent / goals
+	Trigger              string `json:"trigger"`        // edge | heartbeat | task_timeout | claim | human_message
+	RetryOrdinal         int    `json:"retry_ordinal"`  // agent-run retry, 0 for the initial attempt
+	Phase                string `json:"phase"`          // normal | compaction (settlement when explicitly supplied)
+	Model                string `json:"model"`
+	ProfileName          string `json:"profile_name"`
+	LatencyMs            int    `json:"latency_ms"`
+	InputTokens          int    `json:"input_tokens"`
+	OutputTokens         int    `json:"output_tokens"`
+	CacheRead            int    `json:"cache_read"`
+	CacheWrite           int    `json:"cache_write"`
+	SystemChars          int    `json:"system_chars"`
+	MessageChars         int    `json:"message_chars"`
+	ToolChars            int    `json:"tool_schema_chars"`
+	RequestChars         int    `json:"request_chars"`
+	EstimatedInputTokens int    `json:"estimated_input_tokens"`
+	Status               string `json:"status"` // ok | error
 }
 
 const llmUsageSchema = `
@@ -31,20 +40,47 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     id             BIGSERIAL PRIMARY KEY,
     ts             TIMESTAMPTZ NOT NULL DEFAULT now(),
     task_id        TEXT,
-    exploration_id BIGINT,
-    worker         TEXT,
+	 exploration_id BIGINT,
+	 intent_id      BIGINT,
+	 worker         TEXT,
+	 trigger        TEXT,
+	 retry_ordinal  INTEGER DEFAULT 0,
+	 phase          TEXT,
     model          TEXT,
     profile_name   TEXT,
     latency_ms     INTEGER,
     input_tokens   INTEGER NOT NULL DEFAULT 0,
     output_tokens  INTEGER NOT NULL DEFAULT 0,
     cache_read     INTEGER NOT NULL DEFAULT 0,
-    cache_write    INTEGER NOT NULL DEFAULT 0,
-    status         TEXT
+	 cache_write    INTEGER NOT NULL DEFAULT 0,
+	 system_chars   INTEGER DEFAULT 0,
+	 message_chars  INTEGER DEFAULT 0,
+	 tool_schema_chars INTEGER DEFAULT 0,
+	 request_chars  INTEGER DEFAULT 0,
+	 estimated_input_tokens INTEGER DEFAULT 0,
+	 status         TEXT
 );
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS intent_id BIGINT;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS trigger TEXT;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS retry_ordinal INTEGER DEFAULT 0;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS phase TEXT;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS system_chars INTEGER DEFAULT 0;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS message_chars INTEGER DEFAULT 0;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS tool_schema_chars INTEGER DEFAULT 0;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS request_chars INTEGER DEFAULT 0;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS estimated_input_tokens INTEGER DEFAULT 0;
+-- Archive rows from an older schema omit these dimensions. json_populate_recordset
+-- supplies NULL for absent keys, so keep the additive attribution fields nullable.
+ALTER TABLE llm_usage ALTER COLUMN retry_ordinal DROP NOT NULL;
+ALTER TABLE llm_usage ALTER COLUMN system_chars DROP NOT NULL;
+ALTER TABLE llm_usage ALTER COLUMN message_chars DROP NOT NULL;
+ALTER TABLE llm_usage ALTER COLUMN tool_schema_chars DROP NOT NULL;
+ALTER TABLE llm_usage ALTER COLUMN request_chars DROP NOT NULL;
+ALTER TABLE llm_usage ALTER COLUMN estimated_input_tokens DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_llm_usage_task  ON llm_usage(task_id);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage(task_id, model);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_exp   ON llm_usage(exploration_id);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_intent ON llm_usage(exploration_id, intent_id) WHERE intent_id IS NOT NULL;
 `
 
 // EnsureLLMUsageTable creates the llm_usage metering table if it does not exist.
@@ -71,11 +107,22 @@ func (d *DB) InsertLLMUsage(u *LLMUsage) error {
 		expID = u.ExplorationID
 	}
 	_, err := d.Exec(`
-INSERT INTO llm_usage(task_id, exploration_id, worker, model, profile_name, latency_ms, input_tokens, output_tokens, cache_read, cache_write, status)
-VALUES (NULLIF($1,''),$2,NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),$6,$7,$8,$9,$10,$11)`,
-		u.TaskID, expID, u.Worker, u.Model, u.ProfileName,
-		u.LatencyMs, u.InputTokens, u.OutputTokens, u.CacheRead, u.CacheWrite, u.Status)
+	INSERT INTO llm_usage(task_id, exploration_id, intent_id, worker, trigger, retry_ordinal, phase,
+	                      model, profile_name, latency_ms, input_tokens, output_tokens, cache_read, cache_write,
+	                      system_chars, message_chars, tool_schema_chars, request_chars, estimated_input_tokens, status)
+	VALUES (NULLIF($1,''),$2,$3,NULLIF($4,''),NULLIF($5,''),$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),
+	        $10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+		u.TaskID, expID, nullablePositive(u.IntentID), u.Worker, u.Trigger, u.RetryOrdinal, u.Phase,
+		u.Model, u.ProfileName, u.LatencyMs, u.InputTokens, u.OutputTokens, u.CacheRead, u.CacheWrite,
+		u.SystemChars, u.MessageChars, u.ToolChars, u.RequestChars, u.EstimatedInputTokens, u.Status)
 	return err
+}
+
+func nullablePositive(value int64) any {
+	if value > 0 {
+		return value
+	}
+	return nil
 }
 
 // TokenByModel aggregates a task's LLM token usage grouped by model, most-used
@@ -257,70 +304,6 @@ ORDER BY day`, days)
 		return out[i].ProfileName < out[j].ProfileName
 	})
 	return out, nil
-}
-
-// JudgeDayUsage is one UTC-day token bucket for the intercept fallback judge,
-// for the config page's recent-spend sparkline.
-type JudgeDayUsage struct {
-	Date         string `json:"date"` // YYYY-MM-DD (UTC)
-	Calls        int    `json:"calls"`
-	InputTokens  int    `json:"input_tokens"`
-	OutputTokens int    `json:"output_tokens"`
-}
-
-// JudgeUsage is the cumulative token spend of the intercept fallback judge
-// (worker='judge' rows in the always-on ledger), plus a recent daily series.
-type JudgeUsage struct {
-	Calls            int             `json:"calls"`
-	InputTokens      int             `json:"input_tokens"`
-	OutputTokens     int             `json:"output_tokens"`
-	CacheReadTokens  int             `json:"cache_read_tokens"`
-	CacheWriteTokens int             `json:"cache_write_tokens"`
-	Daily            []JudgeDayUsage `json:"daily"`
-}
-
-// JudgeUsageStats returns the fallback judge's all-time token totals and a
-// per-day series over the past `days` days (default 30). Sourced from the
-// always-on llm_usage ledger, so it is accurate across pool rotation and
-// interrupted/failed judge calls. days only bounds the daily series; totals are
-// all-time.
-func (d *DB) JudgeUsageStats(days int) (JudgeUsage, error) {
-	if days <= 0 {
-		days = 30
-	}
-	var u JudgeUsage
-	err := d.QueryRow(`
-SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-       COALESCE(SUM(cache_read),0), COALESCE(SUM(cache_write),0)
-FROM llm_usage
-WHERE worker = 'judge'`).Scan(&u.Calls, &u.InputTokens, &u.OutputTokens,
-		&u.CacheReadTokens, &u.CacheWriteTokens)
-	if err != nil {
-		return JudgeUsage{}, err
-	}
-	rows, err := d.Query(`
-SELECT to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
-       COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0)
-FROM llm_usage
-WHERE worker = 'judge' AND ts >= now() - ($1 * interval '1 day')
-GROUP BY day
-ORDER BY day`, days)
-	if err != nil {
-		return JudgeUsage{}, err
-	}
-	defer rows.Close()
-	u.Daily = []JudgeDayUsage{}
-	for rows.Next() {
-		var day JudgeDayUsage
-		if err := rows.Scan(&day.Date, &day.Calls, &day.InputTokens, &day.OutputTokens); err != nil {
-			return JudgeUsage{}, err
-		}
-		u.Daily = append(u.Daily, day)
-	}
-	if err := rows.Err(); err != nil {
-		return JudgeUsage{}, err
-	}
-	return u, nil
 }
 
 // ParseExpID turns the exploration-id segment parsed from a session string into an

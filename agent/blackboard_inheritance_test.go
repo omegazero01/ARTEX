@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
 	actool "github.com/Autumn-27/norma/tool"
+	"github.com/neouks/series/db"
 )
 
 func callReadJSON(t *testing.T, tool actool.CoreTool, input string) any {
@@ -25,7 +25,7 @@ func callReadJSON(t *testing.T, tool actool.CoreTool, input string) any {
 	return out
 }
 
-func TestGraphOverviewExpandsAssociatedCompanyScope(t *testing.T) {
+func TestGraphOverviewOmitsScopeButPreservesCompanyAssetReads(t *testing.T) {
 	d := testDB(t)
 	defer d.Close()
 
@@ -82,26 +82,8 @@ func TestGraphOverviewExpandsAssociatedCompanyScope(t *testing.T) {
 	if !ok {
 		t.Fatalf("coverage missing: %#v", overview["coverage"])
 	}
-	scopeRows, ok := coverage["scope"].([]map[string]any)
-	if !ok || len(scopeRows) != 1 {
-		t.Fatalf("task scope missing: %#v", coverage["scope"])
-	}
-	companyScope, ok := scopeRows[0]["company_scope"].([]map[string]any)
-	if !ok || len(companyScope) != len(inputs) {
-		t.Fatalf("company scope not expanded: %#v", scopeRows[0])
-	}
-	kinds := make(map[string]string, len(companyScope))
-	for _, rule := range companyScope {
-		kinds[fmt.Sprint(rule["kind"])] = fmt.Sprint(rule["value"])
-	}
-	for _, input := range inputs {
-		if kinds[input.Kind] != input.Value {
-			t.Errorf("scope %s=%q want %q", input.Kind, kinds[input.Kind], input.Value)
-		}
-	}
-	keywords, ok := scopeRows[0]["company_keywords"].([]string)
-	if !ok || len(keywords) != 1 || keywords[0] != keyword {
-		t.Fatalf("company keywords missing: %#v", scopeRows[0]["company_keywords"])
+	if _, exists := coverage["scope"]; exists {
+		t.Fatal("overview should omit scope details")
 	}
 	if hc, _ := coverage["host_count"].(int); hc < 1 {
 		t.Fatalf("company asset host not counted in agent context: %#v", coverage["host_count"])
@@ -181,6 +163,72 @@ func companiesName(t *testing.T, companies *db.CompanyStore, companyID int64) st
 		t.Fatalf("company %d: company=%+v err=%v", companyID, company, err)
 	}
 	return company.Name
+}
+
+func TestDerivedNodesInheritAssetAuthorization(t *testing.T) {
+	d := testDB(t)
+	defer d.Close()
+
+	stamp := time.Now().UnixNano()
+	task, err := d.CreateTaskWithOptions(fmt.Sprintf("derived-authorization-%d", stamp), "goal", db.TaskCreateOptions{AssetApprovalTemplate: "explicit_targets"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.DeleteTask(task.ID) })
+	assetID, err := d.Assets().UpsertRootDomain(db.UpsertRootDomainReq{
+		Domain: fmt.Sprintf("derived-auth-%d.invalid", stamp), TaskID: task.ID, AgentDiscovered: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = d.Assets().DeleteByIDs([]int64{assetID}) })
+
+	store := d.Exploration(task.ExplorationID)
+	factID, err := store.AddNode(db.KindFact, map[string]any{"summary": "hidden pending evidence"}, 0, "confirmed", "worker", []int64{assetID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyIntentID, err := store.AddIntent(map[string]any{"summary": "legacy derived work"}, 5, nil, "planner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Link(factID, db.RelDerivedFrom, legacyIntentID); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := NewToolSet(store, "planner")
+	tools.SetTaskID(task.ID)
+	tools.SetAssetStore(d.Assets(), d.Companies())
+	if tools.nodeAuthorized(mustNode(t, store, legacyIntentID)) {
+		t.Fatal("derived intent remained visible while its ancestor asset was pending")
+	}
+	if err := d.Assets().ApproveTaskAssets(task.ID, []int64{assetID}, "operator", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if !tools.nodeAuthorized(mustNode(t, store, legacyIntentID)) {
+		t.Fatal("derived intent did not become visible after approval")
+	}
+
+	parentID, _ := json.Marshal(factID)
+	intentID, err := tools.addOneIntent(intentItem{
+		Summary: "new derived work", ParentIDs: []json.RawMessage{parentID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchors, err := store.AnchorAssetIDs(intentID)
+	if err != nil || len(anchors) != 1 || anchors[0] != assetID {
+		t.Fatalf("derived intent anchors=%v err=%v, want [%d]", anchors, err, assetID)
+	}
+}
+
+func mustNode(t *testing.T, store *db.ExplorationStore, id int64) *db.Node {
+	t.Helper()
+	node, err := store.GetNode(id)
+	if err != nil || node == nil {
+		t.Fatalf("node %d=%+v err=%v", id, node, err)
+	}
+	return node
 }
 
 func TestBlackboardToolsReadDirectSources(t *testing.T) {
@@ -328,7 +376,7 @@ func TestBlackboardToolsReadDirectSources(t *testing.T) {
 		t.Fatalf("list_facts direct-only: source=%v grand=%v payload=%#v", seenSource, seenGrand, facts)
 	}
 
-	findings := callReadJSON(t, tools.listFindings(), `{}`).([]any)
+	findings := callReadJSON(t, tools.listFindings(), `{}`).(map[string]any)["findings"].([]any)
 	if len(findings) != 1 {
 		t.Fatalf("list_findings: %#v", findings)
 	}
@@ -364,10 +412,8 @@ func TestBlackboardToolsReadDirectSources(t *testing.T) {
 	}
 }
 
-// TestGetWorkerTraceStepIDsDegradeGracefully pins the over-cap behaviour: instead
-// of erroring, get_worker_trace returns the first 5 requested steps and tells the
-// model which ids it deferred, after de-duplicating and dropping invalid ids.
-func TestGetWorkerTraceStepIDsDegradeGracefully(t *testing.T) {
+// Invalid or over-cap trace detail requests fail before executing a query.
+func TestGetWorkerTraceRejectsInvalidStepIDs(t *testing.T) {
 	d := testDB(t)
 	defer d.Close()
 
@@ -401,28 +447,14 @@ func TestGetWorkerTraceStepIDsDegradeGracefully(t *testing.T) {
 	// After dedup/cleanup that is 6 valid ids — one over the cap.
 	requested := []int64{stepIDs[0], stepIDs[0], 0, stepIDs[1], stepIDs[2], stepIDs[3], stepIDs[4], stepIDs[5]}
 	input, _ := json.Marshal(map[string]any{"intent_id": intent, "step_ids": requested})
-	res := callReadJSON(t, tools.getWorkerTrace(), string(input)).(map[string]any)
-
-	returned, _ := res["returned_step_ids"].([]any)
-	if len(returned) != 5 {
-		t.Fatalf("returned_step_ids=%v, want the first 5", res["returned_step_ids"])
+	res, err := tools.getWorkerTrace().Call(t.Context(), input, nil)
+	if err != nil || !res.IsError {
+		t.Fatalf("invalid request accepted: %+v %v", res, err)
 	}
-	// First 5 distinct valid ids, in request order.
-	wantReturned := []int64{stepIDs[0], stepIDs[1], stepIDs[2], stepIDs[3], stepIDs[4]}
-	for i, raw := range returned {
-		if int64(raw.(float64)) != wantReturned[i] {
-			t.Fatalf("returned[%d]=%v, want %d", i, raw, wantReturned[i])
-		}
-	}
-	omitted, _ := res["omitted_step_ids"].([]any)
-	if len(omitted) != 1 || int64(omitted[0].(float64)) != stepIDs[5] {
-		t.Fatalf("omitted_step_ids=%v, want [%d]", res["omitted_step_ids"], stepIDs[5])
-	}
-	if notice, _ := res["notice"].(string); notice == "" {
-		t.Fatalf("notice missing — model would not know a step was deferred")
-	}
-	if steps, _ := res["steps"].([]any); len(steps) != 5 {
-		t.Fatalf("steps=%d, want 5 detail rows", len(steps))
+	tooMany, _ := json.Marshal(map[string]any{"intent_id": intent, "step_ids": stepIDs})
+	res, err = tools.getWorkerTrace().Call(t.Context(), tooMany, nil)
+	if err != nil || !res.IsError {
+		t.Fatalf("over-cap request accepted: %+v %v", res, err)
 	}
 
 	// At or under the cap: no notice, no omitted list.

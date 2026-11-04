@@ -64,7 +64,7 @@ func isKnownField(f string) bool {
 	_, s := knownStringFields[f]
 	_, a := knownArrayFields[f]
 	_, n := knownNumericFields[f]
-	return s || a || n || f == "company_id" || f == "task_id"
+	return s || a || n || f == "company_id" || f == "task_id" || f == "approval_state"
 }
 
 // ── tokeniser ────────────────────────────────────────────────────────────────
@@ -222,10 +222,11 @@ func (p *dslParser) parseAtom() (*astNode, error) {
 //
 // Syntax:
 //
-//	field=value      fuzzy match (ILIKE '%value%')
+//	field=value      fuzzy match (ILIKE '%value%'); spaces around the operator are allowed
 //	field==value     exact match
 //	field!=value     exclude fuzzy
 //	port>8080        numeric comparison
+//	field contains value / field =~ value   fuzzy-match synonyms for `=`
 //	bare word        full-text fuzzy across all main text fields
 //
 // Operators: AND OR (case-insensitive), parentheses for grouping.
@@ -244,7 +245,7 @@ func ParseDSL(s string) (*astNode, error) {
 		return nil, err
 	}
 	if p.peek().kind != tkEOF {
-		return nil, fmt.Errorf("DSL 语法错误：意外的内容 '%s'", p.peek().kind)
+		return nil, fmt.Errorf("DSL 语法错误：意外的内容 '%s'（字段与运算符之间的空格是允许的；请检查字段名和运算符，示例：domain==example.com、url=userList、port==443 AND technology=nginx）", p.peek().kind)
 	}
 	return node, nil
 }
@@ -258,8 +259,9 @@ var fullTextCols = []string{
 }
 
 type whereBuilder struct {
-	args []any
-	base int // placeholders are numbered base+1, base+2, …; 0 = the usual $1, $2, …
+	args   []any
+	base   int   // placeholders are numbered base+1, base+2, …; 0 = the usual $1, $2, …
+	taskID int64 // server-owned context; never inferred from a DSL task_id clause.
 }
 
 func (b *whereBuilder) next(v any) string {
@@ -268,6 +270,9 @@ func (b *whereBuilder) next(v any) string {
 }
 
 func (b *whereBuilder) build(node *astNode) (string, error) {
+	if node == nil {
+		return "1=1", nil
+	}
 	switch node.kind {
 	case "and":
 		parts := make([]string, 0, len(node.children))
@@ -328,6 +333,28 @@ func (b *whereBuilder) buildLeaf(e Expr) (string, error) {
 			return "", fmt.Errorf("company_id 需要整数值: %s", e.Value)
 		}
 		return "company_id = " + b.next(n), nil
+	}
+
+	// Approval enums and HTTP status codes are distinct namespaces. Accept the
+	// common status==approved spelling only for known enums; numeric status keeps
+	// its historical HTTP meaning. Both forms retain the caller's visibility gate.
+	approvalValue := strings.ToLower(e.Value)
+	isApproval := approvalValue == ApprovalApproved || approvalValue == ApprovalPending || approvalValue == ApprovalRevoked || approvalValue == "blocked"
+	if f == "approval_state" || (f == "status" && isApproval) {
+		if b.taskID <= 0 {
+			return "", fmt.Errorf("approval_state 需要当前任务上下文；status/status_code 的整数值表示 HTTP 状态码")
+		}
+		if !isApproval {
+			return "", fmt.Errorf("approval_state 仅支持 approved/pending/blocked/revoked")
+		}
+		op := e.Op
+		if op == "==" {
+			op = "="
+		}
+		if op != "=" && op != "!=" {
+			return "", fmt.Errorf("approval_state 仅支持 =、==、!= 运算符")
+		}
+		return fmt.Sprintf("task_asset_effective_approval_state(%s,assets.id) %s %s", b.next(b.taskID), op, b.next(approvalValue)), nil
 	}
 
 	// numeric fields
@@ -399,7 +426,10 @@ func buildDSLWhereBase(node *astNode, base int) (string, []any, error) {
 
 // ── helpers (shared with parser) ─────────────────────────────────────────────
 
-// tryParseFieldExpr tries to parse "field op value" at pos.
+// tryParseFieldExpr tries to parse "field op value" at pos. Whitespace around
+// the operator is allowed; `contains` and `=~` are accepted as fuzzy-match
+// synonyms for `=`, so natural-language habits do not turn into BARE-token
+// syntax errors.
 func tryParseFieldExpr(s string, pos int) (Expr, int, bool) {
 	i := pos
 	if i >= len(s) || !isIdentStart(s[i]) {
@@ -412,25 +442,84 @@ func tryParseFieldExpr(s string, pos int) (Expr, int, bool) {
 	if !isKnownField(field) {
 		return Expr{}, pos, false
 	}
-	if i >= len(s) {
+	j := skipDSLSpaces(s, i)
+	if j >= len(s) {
 		return Expr{}, pos, false
 	}
 	var op string
 	switch {
-	case i+1 < len(s) && (s[i] == '=' || s[i] == '!' || s[i] == '>' || s[i] == '<') && s[i+1] == '=':
-		op = s[i : i+2]
-		i += 2
-	case s[i] == '>' || s[i] == '<' || s[i] == '=':
-		op = string(s[i])
-		i++
+	case j+1 < len(s) && s[j] == '=' && s[j+1] == '~':
+		op = "=" // fuzzy-match synonym
+		j += 2
+	case j+1 < len(s) && (s[j] == '=' || s[j] == '!' || s[j] == '>' || s[j] == '<') && s[j+1] == '=':
+		op = s[j : j+2]
+		j += 2
+	case s[j] == '>' || s[j] == '<' || s[j] == '=':
+		op = string(s[j])
+		j++
 	default:
-		return Expr{}, pos, false
+		// Word operator: `field contains value`.
+		if word, end := readDSLWord(s, j); strings.EqualFold(word, "contains") && dslWordBoundary(s, end) {
+			op = "="
+			j = end
+		} else {
+			return Expr{}, pos, false
+		}
 	}
-	value, end := readToken(s, i)
-	if end == i {
+	k := skipDSLSpaces(s, j)
+	value, end := readDSLValue(s, k)
+	if end == k {
 		return Expr{}, pos, false
 	}
 	return Expr{Field: field, Op: op, Value: value}, end, true
+}
+
+// skipDSLSpaces advances past ASCII/Unicode spaces between DSL tokens.
+func skipDSLSpaces(s string, i int) int {
+	for i < len(s) && unicode.IsSpace(rune(s[i])) {
+		i++
+	}
+	return i
+}
+
+// readDSLWord reads an identifier-like word (letters/digits/underscore).
+func readDSLWord(s string, i int) (string, int) {
+	start := i
+	for i < len(s) && (isIdentChar(s[i]) || s[i] == '-') {
+		i++
+	}
+	return s[start:i], i
+}
+
+// dslWordBoundary reports whether a word operator ends at a token boundary, so
+// "containsX" is not mistaken for the `contains` operator.
+func dslWordBoundary(s string, i int) bool {
+	if i >= len(s) {
+		return true
+	}
+	switch s[i] {
+	case ' ', '	', '\r', '\n', '(', ')', '"', '\'':
+		return true
+	}
+	return false
+}
+
+// readDSLValue reads a value token; both double and single quotes are honoured
+// so `=~ 'x'` does not keep the quotes in the SQL pattern.
+func readDSLValue(s string, pos int) (string, int) {
+	if pos < len(s) && (s[pos] == '"' || s[pos] == '\'') {
+		quote := s[pos]
+		i := pos + 1
+		for i < len(s) && s[i] != quote {
+			i++
+		}
+		val := s[pos+1 : i]
+		if i < len(s) {
+			i++
+		}
+		return val, i
+	}
+	return readToken(s, pos)
 }
 
 // readToken reads a quoted or unquoted token starting at pos.
@@ -498,7 +587,7 @@ func (s *AssetStore) CountDSL(dsl, typ string, taskID int64) (int, error) {
 		where += fmt.Sprintf(" AND $%d = ANY(task_ids)", len(args))
 	}
 	var n int
-	err = s.db.QueryRow("SELECT count(*) FROM assets WHERE "+where, args...).Scan(&n)
+	err = s.queryRow("SELECT count(*) FROM assets WHERE "+where, args...).Scan(&n)
 	return n, err
 }
 
@@ -530,9 +619,9 @@ func (s *AssetStore) QueryDSL(dsl, typ string, taskID int64, limit, offset int) 
 		where += fmt.Sprintf(" AND $%d = ANY(task_ids)", len(args))
 	}
 	args = append(args, limit, offset)
-	q := assetSelectCols + " WHERE " + where +
+	q := s.selectAssetColumns() + " WHERE " + where +
 		fmt.Sprintf(" ORDER BY last_seen DESC, id DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -634,4 +723,89 @@ func (s *AssetStore) GetByIDsInScope(taskID int64, ids []int64) ([]*Asset, error
 		return nil, err
 	}
 	return assets, nil
+}
+
+// CountDSLByTaskApproval is the task-scoped DSL count. Unlike the global DSL
+// helpers it never exposes assets outside the selected task, and the approved
+// filter uses the effective parent/source-aware authorization predicate.
+func (s *AssetStore) CountDSLByTaskApproval(taskID int64, dsl, typ, tested, approval string) (int, error) {
+	where, args, err := buildTaskDSLWhere(taskID, dsl, typ, tested, approval)
+	if err != nil {
+		return 0, err
+	}
+	var count int
+	err = s.queryRow("SELECT count(*) FROM assets WHERE "+where, args...).Scan(&count)
+	return count, err
+}
+
+// QueryDSLByTaskApproval is the paginated task-scoped counterpart of QueryDSL.
+func (s *AssetStore) QueryDSLByTaskApproval(taskID int64, dsl, typ, tested, approval string, limit, offset int) ([]*Asset, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	where, args, err := buildTaskDSLWhere(taskID, dsl, typ, tested, approval)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, limit, offset)
+	query := s.selectAssetColumns() + " WHERE " + where +
+		fmt.Sprintf(" ORDER BY last_seen DESC, id DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
+	rows, err := s.query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	assets, err := scanAssets(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.hydrateTaskAssetSources(taskID, assets); err != nil {
+		return nil, err
+	}
+	if s.workerRead {
+		return s.projectApprovedAssetHosts(taskID, assets)
+	}
+	return assets, nil
+}
+
+func buildTaskDSLWhere(taskID int64, dsl, typ, tested, approval string) (string, []any, error) {
+	node, err := ParseDSL(dsl)
+	if err != nil {
+		return "", nil, err
+	}
+	b := &whereBuilder{taskID: taskID}
+	where, err := b.build(node)
+	args := b.args
+	if err != nil {
+		return "", nil, err
+	}
+	if typ != "" {
+		args = append(args, typ)
+		where += fmt.Sprintf(" AND type=$%d", len(args))
+	}
+	args = append(args, taskID)
+	taskArg := len(args)
+	taskRef := fmt.Sprintf("$%d", taskArg)
+	association := taskAssetContextAssociationSQL("assets", taskRef)
+	if approval == "blocked" {
+		association = taskAssetBlockedSQL("assets", taskRef)
+	}
+	where = "(" + where + ") AND (" + association + ")"
+	if tested == "true" || tested == "false" {
+		args = append(args, tested == "true")
+		where += " AND " + taskAssetSelectedLinkBoolSQL("assets", taskRef, "tested", fmt.Sprintf("$%d", len(args)))
+	}
+	switch approval {
+	case ApprovalApproved:
+		where += fmt.Sprintf(" AND task_asset_effectively_approved($%d,assets.id)", taskArg)
+	case ApprovalPending, ApprovalRevoked:
+		args = append(args, approval)
+		where += fmt.Sprintf(" AND task_asset_effective_approval_state(%s,assets.id)=$%d", taskRef, len(args))
+	case "blocked":
+		// association already limits the query to current-task tombstones.
+	}
+	return where, args, nil
 }

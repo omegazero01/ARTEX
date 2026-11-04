@@ -6,10 +6,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/transcript"
 	"github.com/google/uuid"
+	"github.com/neouks/series/db"
 )
 
 type completeProvider struct{}
@@ -38,6 +38,27 @@ func TestTaskIDContextUsesExplicitRegistryID(t *testing.T) {
 	}
 	if got := TaskIDFrom(nil); got != "" {
 		t.Fatalf("nil context returned %q", got)
+	}
+}
+
+func TestRunInfoMergesEngineAndAgentAttribution(t *testing.T) {
+	ctx := WithRunInfo(context.Background(), RunInfo{Trigger: "heartbeat", RetryOrdinal: 2})
+	ctx = WithRunInfo(ctx, RunInfo{TaskID: 42, ExplorationID: 7, IntentID: 9, AgentKey: "worker"})
+	got := RunInfoFrom(ctx)
+	if got.TaskID != 42 || got.ExplorationID != 7 || got.IntentID != 9 || got.AgentKey != "worker" || got.Trigger != "heartbeat" || got.RetryOrdinal != 2 {
+		t.Fatalf("merged run info = %+v", got)
+	}
+}
+
+func TestRequestDimensions(t *testing.T) {
+	req := llm.CompletionRequest{
+		System:   []string{"system"},
+		Messages: []llm.Message{llm.UserText("hello")},
+		Tools:    []llm.ToolSchema{{Name: "read", Description: "read a file", InputSchema: map[string]any{"type": "object"}}},
+	}
+	dims := requestDimensionsFor(req)
+	if dims.system <= 0 || dims.messages <= 0 || dims.tools <= 0 || dims.total != dims.system+dims.messages+dims.tools {
+		t.Fatalf("bad request dimensions: %+v", dims)
 	}
 }
 
@@ -83,15 +104,18 @@ func (meteredStreamProvider) Stream(context.Context, llm.CompletionRequest) iter
 }
 
 func TestSideUsageRecordedOnceOnConsumerCancellation(t *testing.T) {
-	dsn := os.Getenv("ARTEX_PG_DSN")
+	dsn := os.Getenv("SERIES_PG_DSN")
 	if dsn == "" {
-		t.Skip("requires isolated ARTEX_PG_DSN")
+		t.Skip("requires isolated SERIES_PG_DSN")
 	}
 	pg, err := db.Open(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pg.Close()
+	if err := pg.EnsureLLMUsageTable(); err != nil {
+		t.Fatal(err)
+	}
 	for _, early := range []bool{false, true} {
 		profile := "btw-metering-" + uuid.NewString()
 		ctx, cancel := context.WithCancel(transcript.WithSessionID(t.Context(), "exp0-btw-test"))

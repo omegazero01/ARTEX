@@ -181,13 +181,19 @@ func TestAppendIPPort(t *testing.T) {
 func TestUpsertSubdomain(t *testing.T) {
 	d, av2, _ := testSetup(t)
 	defer d.Close()
+	// DNS evidence requires a real task; don't depend on task 1 left by another test.
+	task, err := d.CreateTaskWithOptions("subdomain test", "test", TaskCreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
 
 	id, err := av2.UpsertSubdomain(UpsertSubdomainReq{
 		Domain:      "sub.subdtest.com",
 		RecordType:  "A",
 		RecordValue: []string{"1.2.3.4"},
 		ICP:         "B99",
-		TaskID:      1,
+		TaskID:      task.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -596,7 +602,12 @@ func TestQueryByTask(t *testing.T) {
 	d, av2, _ := testSetup(t)
 	defer d.Close()
 
-	const taskID = int64(99999)
+	task, err := d.CreateTask(fmt.Sprintf("query-by-task-%d", time.Now().UnixNano()), "test", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	taskID := task.ID
 	id, err := av2.UpsertRootDomain(UpsertRootDomainReq{Domain: "taskquery.net", TaskID: taskID})
 	if err != nil {
 		t.Fatal(err)
@@ -645,7 +656,12 @@ func TestQueryByTaskPaging(t *testing.T) {
 	d, av2, _ := testSetup(t)
 	defer d.Close()
 
-	const taskID = int64(99998)
+	task, err := d.CreateTask(fmt.Sprintf("query-by-task-paging-%d", time.Now().UnixNano()), "test", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	taskID := task.ID
 	const n = 60
 	for i := 0; i < n; i++ {
 		id, err := av2.UpsertRootDomain(UpsertRootDomainReq{
@@ -905,7 +921,12 @@ func TestAssetPaginationUsesStableIDTieBreaker(t *testing.T) {
 	defer d.Close()
 
 	stamp := time.Now().UnixNano()
-	taskID := stamp
+	task, err := d.CreateTask(fmt.Sprintf("stable-page-task-%d", stamp), "test", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	taskID := task.ID
 	marker := fmt.Sprintf("stable-page-%d", stamp)
 	sharedSeen := time.Date(2026, time.August, 21, 9, 0, 0, 0, time.UTC)
 	ids := make([]int64, 0, 5)
@@ -1025,11 +1046,11 @@ func TestQueryDSLInScopeMembership(t *testing.T) {
 	}
 
 	stamp := time.Now().UnixNano()
-	root := fmt.Sprintf("sc%d.invalid", stamp)           // in-scope root domain (task)
-	srcRoot := fmt.Sprintf("src%d.invalid", stamp)       // in-scope via source task
-	out := fmt.Sprintf("out%d.invalid", stamp)           // out of every scope
-	marker := fmt.Sprintf("mk%d", stamp)                 // bare-text token present in all rows
-	foreignTask := stamp + 777                           // asset produced by an unrelated task
+	root := fmt.Sprintf("sc%d.invalid", stamp)     // in-scope root domain (task)
+	srcRoot := fmt.Sprintf("src%d.invalid", stamp) // in-scope via source task
+	out := fmt.Sprintf("out%d.invalid", stamp)     // out of every scope
+	marker := fmt.Sprintf("mk%d", stamp)           // bare-text token present in all rows
+	foreignTask := stamp + 777                     // asset produced by an unrelated task
 
 	// Scope: task owns root; source task owns srcRoot; task owns an IP /24.
 	for _, sc := range []struct {
@@ -1057,7 +1078,7 @@ func TestQueryDSLInScopeMembership(t *testing.T) {
 		{"subdomain", "api." + root, root, "", "", "", marker},                        // under task root
 		{"service", "www." + root, root, "https://www." + root + "/", "", "", marker}, // service under task root
 		{"endpoint", "www." + root, root, "https://www." + root + "/a?" + marker + "=1", "GET", "", ""},
-		{"subdomain", "dev." + srcRoot, srcRoot, "", "", "", marker}, // under source-task root
+		{"subdomain", "dev." + srcRoot, srcRoot, "", "", "", marker},                                      // under source-task root
 		{"endpoint", "198.51.100.9", "198.51.100.9", "http://198.51.100.9:8080/" + marker, "GET", "", ""}, // IP-literal host, ip col empty
 		{"subdomain", "x." + out, out, "", "", "", marker},                                                // out of scope
 	}

@@ -3,13 +3,15 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
 )
 
 const maxBatchControlIDs = 100
@@ -22,9 +24,12 @@ type taskControlResult struct {
 }
 
 type intentControlResult struct {
-	ID      int64             `json:"id"`
-	State   string            `json:"state"`
-	Deleted *db.IntentCleanup `json:"deleted,omitempty"`
+	CancelledByUser bool              `json:"cancelled_by_user"`
+	CancelReason    string            `json:"cancel_reason,omitempty"`
+	Queued          bool              `json:"queued,omitempty"`
+	ID              int64             `json:"id"`
+	State           string            `json:"state"`
+	Deleted         *db.IntentCleanup `json:"deleted,omitempty"`
 }
 
 // parsedTaskID carries one requested batch id together with whether it parsed.
@@ -90,6 +95,9 @@ func (s *Server) resumeAdmissionMode(t *Task) string {
 // deliberately limited to paused tasks; reruns and finding follow-ups use
 // admitTask directly when they need to revive a terminal task.
 func (s *Server) applyTaskControl(t *Task, action string) (taskControlResult, error) {
+	if action == "finish" {
+		return s.finishTask(t)
+	}
 	return s.applyTaskControlWithCause(t, action, agent.AbortPausedByUser)
 }
 
@@ -145,25 +153,14 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 	default:
 		return out, fmt.Errorf("action must be pause|resume")
 	}
+	s.engine.emitActivity(t, db.Activity{Worker: "system", Kind: "text", Summary: "用户" + map[string]string{"pause": "暂停任务", "resume": "恢复任务"}[action]})
 	log.Printf("[task] #%s %s", t.ID, map[string]string{"pause": "已暂停", "resume": "已继续"}[action])
 	return out, nil
 }
 
-// intentSummaryOf 取意图 payload 里的 summary,供删除通知在意图节点消失(真删除)前留档。
-func intentSummaryOf(n *db.Node) string {
-	if n == nil {
-		return ""
-	}
-	var p map[string]any
-	if json.Unmarshal(n.Payload, &p) == nil {
-		if s, ok := p["summary"].(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
-func (s *Server) applyIntentControl(ctx context.Context, t *Task, iid int64, action, reason, mode string) (intentControlResult, error) {
+func (s *Server) applyIntentControl(ctx context.Context, t *Task, iid int64, action, reason string) (intentControlResult, error) {
+	t.workerControlMu.Lock()
+	defer t.workerControlMu.Unlock()
 	out := intentControlResult{ID: iid}
 	node, err := t.Store.GetNode(iid)
 	if err != nil {
@@ -188,54 +185,95 @@ func (s *Server) applyIntentControl(ctx context.Context, t *Task, iid int64, act
 		}
 		out.State = "paused"
 	case "resume":
-		if node.State != "paused" {
-			return out, fmt.Errorf("仅已暂停的意图可以恢复")
+		if node.State == "open" && !node.UserCancelled() {
+			results, err := s.dispatchTaskIntentsLocked(ctx, t, []int64{iid})
+			if err != nil {
+				return out, err
+			}
+			if len(results) != 1 || results[0].Status == "rejected" {
+				return out, fmt.Errorf("意图下发失败: %v", results)
+			}
+			out.State, out.Queued = "open", t.lifecycleSnapshot().Queued
+			return out, nil
 		}
-		changed, err := t.Store.CompareAndSetIntentState(iid, "paused", "open")
+		if node.State != "paused" && !(node.State == "stopped" && node.UserCancelled()) {
+			return out, fmt.Errorf("仅已暂停或用户已取消的意图可以重新开启")
+		}
+		changed, err := t.Store.ReopenIntentByUser(iid, node.State)
 		if err != nil {
 			return out, err
 		}
 		if !changed {
-			return out, fmt.Errorf("%w: 意图不再是 paused 状态", db.ErrIntentStateConflict)
+			return out, db.ErrIntentStateConflict
+		}
+		queued, err := s.admitTask(t, "resume")
+		if err != nil {
+			if restoreErr := t.Store.RestoreUserReopen(node); restoreErr != nil {
+				return out, fmt.Errorf("%w; restore: %v", err, restoreErr)
+			}
+			return out, err
 		}
 		t.Notify()
-		out.State = "open"
+		out.State, out.Queued = "open", queued
 	case "cancel":
-		// 删除支持两种模式:
-		//   soft(默认,假删除):意图停到 state='deleted'、删除原因记入 delete_reason 字段,
-		//     保留意图节点与全部产出/血缘,不再在图上另挂 fact。
-		//   hard(真删除):物理删除该意图及"仅由它支撑"的独占子孙节点(级联到叶子),避免留下
-		//     孤立数据;共享节点、goal、任务根事实保留。
-		// 两种模式都用 cancelled 触发告知 planner(意图内容 + 删除原因),让它据此重规划。
-		if node.State != "running" && node.State != "paused" && node.State != "open" {
-			return out, fmt.Errorf("仅待领/运行中/已暂停的意图可以删除")
-		}
 		reason = strings.TrimSpace(reason)
 		if reason == "" {
-			return out, fmt.Errorf("请填写删除原因")
-		}
-		if node.State == "running" {
-			if err := s.engine.ControlWork(ctx, iid, "cancel"); err != nil {
-				return out, err
+			reason = "用户取消等待运行"
+			if node.State != "open" {
+				reason = "用户取消 Worker"
 			}
 		}
-		summary := intentSummaryOf(node)
-		if mode == "hard" {
-			cleanup, err := t.Store.CancelIntent(iid)
+		// A claimed row can precede registerWork briefly. Wait for registration or
+		// settlement without letting another UI action or pool claim race this one.
+		waitCtx, cancel := context.WithTimeout(ctx, workControlWaitTimeout)
+		defer cancel()
+		for {
+			if err := waitCtx.Err(); err != nil {
+				return out, err
+			}
+			factID, stopErr := t.Store.StopIntentWithReason(iid, reason, "user")
+			if stopErr == nil {
+				if factID != 0 {
+					s.cancelWorkerSide(t.ID, t.ExpID, iid)
+					t.NotifyCancelled(iid, reason)
+				}
+				current, err := t.Store.GetNode(iid)
+				if err != nil {
+					return out, err
+				}
+				out.State, out.CancelledByUser = "stopped", true
+				var p struct {
+					Reason string `json:"cancel_reason"`
+				}
+				if current != nil {
+					_ = json.Unmarshal(current.Payload, &p)
+				}
+				out.CancelReason = p.Reason
+				break
+			}
+			if !errors.Is(stopErr, db.ErrIntentStateConflict) {
+				return out, stopErr
+			}
+			current, err := t.Store.GetNode(iid)
 			if err != nil {
 				return out, err
 			}
-			s.cancelWorkerSide(t.ID, t.ExpID, iid)
-			t.NotifyCancelled(iid, summary, reason)
-			out.Deleted = &cleanup
-			out.State = "" // 节点已删除,前端据 Deleted 从列表移除
-		} else {
-			if _, err := t.Store.SoftDeleteIntent(iid, reason); err != nil {
-				return out, err
+			if current != nil && (current.State == "paused" || current.State == "open" || (current.State == "stopped" && current.UserCancelled())) {
+				continue
 			}
-			s.cancelWorkerSide(t.ID, t.ExpID, iid)
-			t.NotifyCancelled(iid, summary, reason)
-			out.State = db.StateIntentDeleted
+			if current == nil || current.State != "running" {
+				return out, stopErr
+			}
+			if err := s.engine.ControlWork(waitCtx, iid, "cancel"); err != nil {
+				if !errors.Is(err, errWorkControlConflict) {
+					return out, err
+				}
+				select {
+				case <-waitCtx.Done():
+					return out, waitCtx.Err()
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
 		}
 	default:
 		return out, fmt.Errorf("action must be pause|resume|cancel")

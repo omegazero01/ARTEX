@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
 )
 
 type scriptedLLMProvider struct {
@@ -601,11 +601,9 @@ func TestTaskRuntimeAvailableUnboundRoleFollowsChainThenGlobal(t *testing.T) {
 func TestAuthoritativeTaskResolverDoesNotFallBackWhenChainUnavailable(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	e.SetAuthoritativeAgentResolver(func(*Task) (*agent.Planner, *agent.Worker) {
-		return &agent.Planner{}, &agent.Worker{}
-	})
+	e.UseLLM(&agent.Planner{}, &agent.Worker{})
 	if !e.ReadyFor(&Task{ID: "7"}) {
-		t.Fatal("an available authoritative chain should make the task ready")
+		t.Fatal("global provider should initially make task ready")
 	}
 	e.SetAuthoritativeAgentResolver(func(*Task) (*agent.Planner, *agent.Worker) {
 		return nil, nil

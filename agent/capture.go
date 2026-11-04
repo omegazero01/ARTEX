@@ -6,12 +6,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/intercept"
-	"github.com/Autumn-27/artex/sidequestion"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/intercept"
+	"github.com/neouks/series/sidequestion"
 )
 
 // captureRun drives one agent turn-to-completion over Session.Prompt and emits a
@@ -25,9 +25,12 @@ import (
 // KindText/KindThinking arrive as streaming deltas (one event per fragment); a
 // contiguous run is coalesced into a single record so the trace shows whole
 // messages, not dozens of fragments.
-func captureRun(ctx context.Context, opts agentcore.Options, input string, emit func(db.Activity)) (string, harness.TerminalReason, error) {
-	s := agentcore.NewSession(opts)
-	defer s.Close() // release the session's background-task manager (temp dir + processes)
+func captureRun(ctx context.Context, opts agentcore.Options, input string, emit func(db.Activity), settleGuard ...string) (string, harness.TerminalReason, error) {
+	s, closeSession, err := newSession(opts, settleGuard...)
+	if err != nil {
+		return "", "", err
+	}
+	defer closeSession() // release the session's background-task manager (temp dir + processes)
 	return captureRunSession(ctx, s, input, emit)
 }
 
@@ -94,12 +97,13 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 				continue
 			}
 			flush()
-			toolNames[ev.ToolUse.ID] = ev.ToolUse.Name
-			in := string(ev.ToolUse.Input)
-			lastTool.start(ev.ToolUse.ID, ev.ToolUse.Name, in)
-			auditTrace.Start(ev.ToolUse.ID, ev.ToolUse.Name, ev.ToolUse.Input)
-			rec(db.Activity{Kind: "tool_use", Tool: ev.ToolUse.Name, ToolUseID: ev.ToolUse.ID,
-				Summary: ev.ToolUse.Name + " " + firstLine(in, 200), Detail: in})
+			call := assetContextCall(*ev.ToolUse)
+			toolNames[call.ID] = call.Name
+			in := string(call.Input)
+			lastTool.start(call.ID, call.Name, in)
+			auditTrace.Start(call.ID, call.Name, call.Input)
+			rec(db.Activity{Kind: "tool_use", Tool: call.Name, ToolUseID: call.ID,
+				Summary: call.Name + " " + firstLine(in, 200), Detail: in})
 		case harness.KindToolResult:
 			if ev.ToolResult == nil {
 				continue
@@ -209,6 +213,7 @@ func approvalHistory(messages []llm.Message) []db.InterceptContextEntry {
 			case llm.BlockText:
 				entry.Text = block.Text
 			case llm.BlockToolUse:
+				block = assetContextCall(block)
 				entry.Kind, entry.Tool, entry.ToolUseID, entry.Text = "tool_use", block.Name, block.ID, string(block.Input)
 			case llm.BlockToolResult:
 				entry.Kind, entry.ToolUseID, entry.Text, entry.IsError = "tool_result", block.ToolUseID, blocksText(block.Content), block.IsError

@@ -2,8 +2,6 @@ package server
 
 import (
 	"bytes"
-	"io"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,8 +22,9 @@ const (
 )
 
 // wsResolve maps a user-supplied relative path to an absolute path INSIDE the work
-// dir. It returns ok=false if the path would escape the root. filepath.Clean on a
-// rooted copy collapses any ".." so nothing can climb above the root.
+// dir. It returns ok=false if the path would escape the root, either through ".."
+// or through a symlink that points outside. filepath.Clean on a rooted copy
+// collapses any ".." so nothing can climb above the root.
 func (s *Server) wsResolve(rel string) (string, bool) {
 	base := filepath.Clean(s.m.dir)
 	rel = strings.TrimPrefix(strings.TrimSpace(rel), "/")
@@ -34,7 +33,59 @@ func (s *Server) wsResolve(rel string) (string, bool) {
 	if abs != base && !strings.HasPrefix(abs, base+string(os.PathSeparator)) {
 		return "", false
 	}
+	// Clean only removes ".."; it never follows symlinks. A link created inside
+	// the work dir (by an agent, an upload, or an operator) would pass the prefix
+	// check and then resolve to any file the service account can reach, so the
+	// real path is re-checked against the real root as well.
+	if !s.wsInsideRoot(abs) {
+		return "", false
+	}
 	return abs, true
+}
+
+// wsInsideRoot reports whether abs still lands inside the work dir after following
+// symlinks. A path that does not exist yet (new file or directory) is checked via
+// its nearest existing ancestor; an unresolvable path is rejected.
+//
+// Residual risk: this is check-then-open, so a link swapped between the two calls
+// can still escape. Closing that window needs O_NOFOLLOW/openat-style opens, which
+// the current os.Open/OpenFile call sites do not provide.
+func (s *Server) wsInsideRoot(abs string) bool {
+	base, ok := resolveRealPath(filepath.Clean(s.m.dir))
+	if !ok {
+		base = filepath.Clean(s.m.dir)
+	}
+	real, ok := resolveExistingPath(abs)
+	if !ok {
+		return false
+	}
+	return pathInside(real, base)
+}
+
+// resolveExistingPath follows reparse points on the longest existing prefix of p
+// and appends the not-yet-existing remainder unchanged (the remainder comes from
+// an already cleaned path, so it cannot contain "..").
+func resolveExistingPath(p string) (string, bool) {
+	if resolved, ok := resolveRealPath(p); ok {
+		return resolved, true
+	}
+	dir, rest := p, ""
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+		resolved, ok := resolveRealPath(dir)
+		if !ok {
+			continue
+		}
+		if rest == "" {
+			return resolved, true
+		}
+		return filepath.Join(resolved, rest), true
+	}
 }
 
 // wsRel renders an absolute path back as a workspace-relative path (forward slashes).
@@ -263,21 +314,6 @@ func (s *Server) wsUpload(w http.ResponseWriter, r *http.Request) {
 		saved++
 	}
 	writeJSON(w, 200, map[string]any{"uploaded": saved})
-}
-
-func saveUpload(hdr *multipart.FileHeader, dest string) error {
-	src, err := hdr.Open()
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, src)
-	return err
 }
 
 // sanitizeFilename strips characters unsafe for a Content-Disposition filename token.

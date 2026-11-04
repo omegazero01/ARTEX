@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -14,19 +15,24 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/artex/agent"
-	pgdb "github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/enrich"
-	"github.com/Autumn-27/artex/guard"
-	"github.com/Autumn-27/artex/intercept"
-	"github.com/Autumn-27/artex/traffic"
 	actool "github.com/Autumn-27/norma/tool"
+	"github.com/neouks/series/agent"
+	pgdb "github.com/neouks/series/db"
+	"github.com/neouks/series/enrich"
+	"github.com/neouks/series/guard"
+	"github.com/neouks/series/intercept"
+	"github.com/neouks/series/traffic"
 )
 
 // Task is one engagement: a description + goal + its own exploration store,
 // sharing the process-wide asset store. ID is the PG task id as a string; ExpID
 // is the exploration the task owns.
 type Task struct {
+	ExecutionMode     string             `json:"execution_mode"`
+	workerControlMu   sync.Mutex         // Serializes user controls with worker admission.
+	plannerCancel     context.CancelFunc // Protected by workerControlMu; never cancels Workers.
+	plannerGeneration uint64
+
 	ID           string `json:"id"`
 	ExpID        int64  `json:"exploration_id"`
 	Name         string `json:"name"` // 可选任务名称;空=未命名
@@ -55,16 +61,19 @@ type Task struct {
 	CompanyIDs         []int64 `json:"company_ids,omitempty"`
 	Status             string  `json:"status"` // persisted lifecycle status (done/failed/timeout 为终态；空/其它则由运行态推导)
 	// 任务级超时(见 docs/任务级超时与收尾设计.md)。DeadlineAt/FirstRunAt 为 unix 秒,0=未设/未运行。
-	TimeoutSeconds       int                    `json:"timeout_seconds"`
-	PlanHeartbeatSeconds int                    `json:"plan_heartbeat_seconds"` // planner 心跳触发间隔(秒)
-	CoverageEnabled      bool                   `json:"coverage_enabled"`       // 资产覆盖度功能开关(创建时定,默认开)
-	FirstRunAt           int64                  `json:"first_run_at,omitempty"`
-	DeadlineAt           int64                  `json:"deadline_at,omitempty"`
-	Store                *pgdb.ExplorationStore `json:"-"`
-	Guard                *guard.Guard           `json:"-"`
-	notify               chan struct{}
-	lifecycleMu          sync.RWMutex
-	llmMu                sync.RWMutex
+	TimeoutSeconds        int                    `json:"timeout_seconds"`
+	PlanHeartbeatSeconds  int                    `json:"plan_heartbeat_seconds"` // planner 心跳触发间隔(秒)
+	CoverageEnabled       bool                   `json:"coverage_enabled"`       // 资产覆盖度功能开关(创建时定,默认开)
+	AssetApprovalTemplate string                 `json:"asset_approval_template"`
+	FirstRunAt            int64                  `json:"first_run_at,omitempty"`
+	DeadlineAt            int64                  `json:"deadline_at,omitempty"`
+	Store                 *pgdb.ExplorationStore `json:"-"`
+	Guard                 *guard.Guard           `json:"-"`
+	notify                chan struct{}
+	workerWakeMu          sync.Mutex
+	workerWake            chan struct{}
+	lifecycleMu           sync.RWMutex
+	llmMu                 sync.RWMutex
 
 	// pendingTriggers accumulates the concrete changes (worker done / finding) that
 	// fired planning rounds since the last one consumed them. The debounce coalesces
@@ -78,20 +87,22 @@ type Task struct {
 // updateLifecycle instead of reading or writing the corresponding Task fields
 // directly after the task has been published by Manager.
 type taskLifecycleState struct {
-	Name          string
-	PinnedAt      int64
-	Status        string
-	Paused        bool
-	Queued        bool
-	QueuedAt      int64
-	QueueMode     string
-	CompletedAt   int64
-	FirstRunAt    int64
-	DeadlineAt    int64
-	SourceTaskIDs []int64
-	CompanyIDs    []int64
-	CategoryID    *int64
-	CategoryName  string
+	ExecutionMode         string
+	AssetApprovalTemplate string
+	Name                  string
+	PinnedAt              int64
+	Status                string
+	Paused                bool
+	Queued                bool
+	QueuedAt              int64
+	QueueMode             string
+	CompletedAt           int64
+	FirstRunAt            int64
+	DeadlineAt            int64
+	SourceTaskIDs         []int64
+	CompanyIDs            []int64
+	CategoryID            *int64
+	CategoryName          string
 }
 
 func (t *Task) lifecycleSnapshot() taskLifecycleState {
@@ -105,20 +116,22 @@ func (t *Task) lifecycleSnapshot() taskLifecycleState {
 
 func (t *Task) lifecycleSnapshotLocked() taskLifecycleState {
 	return taskLifecycleState{
-		Name:          t.Name,
-		PinnedAt:      t.PinnedAt,
-		Status:        t.Status,
-		Paused:        t.Paused,
-		Queued:        t.Queued,
-		QueuedAt:      t.QueuedAt,
-		QueueMode:     t.QueueMode,
-		CompletedAt:   t.CompletedAt,
-		FirstRunAt:    t.FirstRunAt,
-		DeadlineAt:    t.DeadlineAt,
-		SourceTaskIDs: append([]int64(nil), t.SourceTaskIDs...),
-		CompanyIDs:    append([]int64(nil), t.CompanyIDs...),
-		CategoryID:    cloneInt64Ptr(t.CategoryID),
-		CategoryName:  t.CategoryName,
+		Name:                  t.Name,
+		PinnedAt:              t.PinnedAt,
+		Status:                t.Status,
+		Paused:                t.Paused,
+		Queued:                t.Queued,
+		QueuedAt:              t.QueuedAt,
+		QueueMode:             t.QueueMode,
+		CompletedAt:           t.CompletedAt,
+		FirstRunAt:            t.FirstRunAt,
+		AssetApprovalTemplate: t.AssetApprovalTemplate,
+		ExecutionMode:         t.ExecutionMode,
+		DeadlineAt:            t.DeadlineAt,
+		SourceTaskIDs:         append([]int64(nil), t.SourceTaskIDs...),
+		CompanyIDs:            append([]int64(nil), t.CompanyIDs...),
+		CategoryID:            cloneInt64Ptr(t.CategoryID),
+		CategoryName:          t.CategoryName,
 	}
 }
 
@@ -138,12 +151,40 @@ func (t *Task) updateLifecycle(update func(*taskLifecycleState)) {
 	t.QueueMode = state.QueueMode
 	t.CompletedAt = state.CompletedAt
 	t.FirstRunAt = state.FirstRunAt
+	t.AssetApprovalTemplate = state.AssetApprovalTemplate
+	t.ExecutionMode = state.ExecutionMode
 	t.DeadlineAt = state.DeadlineAt
 	t.SourceTaskIDs = append(t.SourceTaskIDs[:0], state.SourceTaskIDs...)
 	t.CompanyIDs = append(t.CompanyIDs[:0], state.CompanyIDs...)
 	t.CategoryID = cloneInt64Ptr(state.CategoryID)
 	t.CategoryName = state.CategoryName
 	t.lifecycleMu.Unlock()
+}
+
+// beginPlannerRound registers a cancellation handle independently of the task's
+// execution context. Mode changes can stop only Planner while Workers continue.
+// The admission check and registration share workerControlMu with mode switches.
+func (t *Task) beginPlannerRound(parent context.Context) (context.Context, func(), bool) {
+	t.workerControlMu.Lock()
+	defer t.workerControlMu.Unlock()
+	if parent.Err() != nil || t.lifecycleSnapshot().ExecutionMode == pgdb.ExecutionManual {
+		return parent, nil, false
+	}
+	ctx, cancel := context.WithCancel(parent)
+	if t.plannerCancel != nil {
+		t.plannerCancel()
+	}
+	t.plannerGeneration++
+	generation := t.plannerGeneration
+	t.plannerCancel = cancel
+	return ctx, func() {
+		t.workerControlMu.Lock()
+		if t.plannerGeneration == generation {
+			t.plannerCancel = nil
+		}
+		t.workerControlMu.Unlock()
+		cancel()
+	}, true
 }
 
 type taskLLMState struct {
@@ -216,12 +257,13 @@ type DeleteTaskResult struct {
 // Manager owns the PostgreSQL data source (asset graph + every task's exploration
 // graph + config) and the in-memory set of task handles.
 type Manager struct {
-	dir         string
-	pg          *pgdb.DB
-	assets      *pgdb.AssetStore
-	traffic     *traffic.Traffic       // process-wide recording proxy (may be nil)
-	enrich      *enrich.Engine         // engine-side asset auto-completion (DNS/HTTP)
-	interceptor *intercept.Interceptor // user-configured tool-call interception rules
+	dir           string
+	pg            *pgdb.DB
+	assets        *pgdb.AssetStore
+	traffic       *traffic.Traffic       // process-wide recording proxy (may be nil)
+	enrich        *enrich.Engine         // engine-side asset auto-completion (DNS/HTTP)
+	interceptor   *intercept.Interceptor // user-configured tool-call interception rules
+	trafficDiskMu sync.Mutex             // serialize persistence and runtime application of disk settings
 
 	companyMu sync.Mutex // serializes task/company-scope commits with live handle registration
 	// taskStateMu preserves commit order between PostgreSQL lifecycle writes and
@@ -245,17 +287,29 @@ type Manager struct {
 	// capture is on it becomes the MITM's upstream; when capture is off it is
 	// injected into agent bash env / WebFetch directly. See ProxyAddr.
 	globalProxy string
+	// smartProxyPool is the egress proxy used for hosts the agent marked as
+	// WAF-blocked; smart is the per-request resolver behind mark_host_proxy.
+	smartProxyPool string
+	smart          *traffic.SmartProxy
 }
 
 // Settings keys the UI toggles at runtime.
 const (
 	settingTrafficCapture      = "traffic_capture"
 	settingAgentTrafficBinding = "agent_traffic_binding"
-	settingWebSearchOn         = "web_search_enabled"
-	settingWebSearchBackend    = "web_search_backend"
-	settingBraveKey            = "brave_search_api_key"
-	settingTavilyKey           = "tavily_search_api_key"
-	settingWebSearchProxy      = "web_search_proxy"
+	// settingTrafficSkipStatic + settingTrafficSkipTypes control the front-end
+	// static-asset recording filter (HTML/JS/CSS/images/fonts/media); the types
+	// value is a comma-separated rule list, empty = built-in default.
+	settingTrafficSkipStatic = "traffic_skip_static"
+	settingTrafficSkipTypes  = "traffic_skip_types"
+	// settingTrafficRetentionDays bounds how long recorded exchanges stay on
+	// disk; 0 disables the sweeper.
+	settingTrafficRetentionDays = "traffic_retention_days"
+	settingWebSearchOn          = "web_search_enabled"
+	settingWebSearchBackend     = "web_search_backend"
+	settingBraveKey             = "brave_search_api_key"
+	settingTavilyKey            = "tavily_search_api_key"
+	settingWebSearchProxy       = "web_search_proxy"
 	// settingGlobalProxy is the global egress proxy for all target traffic
 	// (http/https/socks5). Empty = direct. Distinct from web_search_proxy (which
 	// only routes the search backend) and the per-profile LLM proxy.
@@ -275,6 +329,15 @@ const (
 	// agent(planner/worker/主 agent/对话)由 noa 接管上下文压缩,取代内置 compaction。
 	// 每 run 读一次,切换只影响之后启动的 run。
 	settingNoaCompaction = "noa_compaction"
+	// 实验功能:Planner 每轮预注入的态势窗口。full=当前完整窗口;lean=只注入目标、
+	// frontier、最近事实和读取入口。图/权限/审计不变;每轮读取,切换即时生效。
+	settingPlannerOverviewMode = "planner_overview_mode"
+	// Planner 态势窗口的完整/精简数值。存 JSON，零值表示使用内置默认值；
+	// 每轮读取，修改在下一轮规划生效。
+	settingPlannerOverviewConfig = "planner_overview_config"
+	// 上下文压缩的两条线（工具输出清理线 / 历史摘要线）。存 JSON，零值=用内置
+	// 窗口推导；每 run 读一次，对之后启动的 run 生效。
+	settingContextPolicyConfig = "context_policy_config"
 	// defaultWebSearchBackend is used when web search is on but no backend was picked.
 	defaultWebSearchBackend = "ddgs"
 	// deepSeekWebSearchBackend borrows the active LLM profile instead of its own
@@ -354,6 +417,15 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	// Agent-issued curl/wget default to a browser User-Agent via startup files
+	// under <data>/tool-http (existing files are preserved). Injected into every
+	// Bash session by proxyEnv; an explicit -A on the command line still wins.
+	if err := agent.ConfigureToolUA(filepath.Join(dir, "tool-http")); err != nil {
+		log.Printf("[manager] curl/wget 默认 UA 配置失败（不影响启动）：%v", err)
+	}
+	// Host lessons: failed Bash/DSL calls are distilled into <data>/host/lessons.json
+	// and surfaced in the Bash / asset_search descriptions on the next run.
+	agent.ConfigureHostLessons(filepath.Join(dir, "host", "lessons.json"))
 	dsn, source, err := pgdb.DSN()
 	if err != nil {
 		return nil, err
@@ -398,18 +470,27 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 			}
 		}
 		if tr != nil {
+			tr.SetAssetPolicyStore(m.assets)
 			m.traffic = tr
-			go func() {
-				log.Printf("[traffic] recording proxy on %s (set HTTP_PROXY=%s + trust _ca CA)", proxyAddr, tr.ProxyAddr())
-				if err := tr.Start(); err != nil {
-					log.Printf("[traffic] proxy stopped: %v", err)
-				}
-			}()
 		}
 	}
 	// Asset auto-completion engine (§5): HTTP probes routed through the recording
 	// proxy (via m.ProxyAddr, which honors the traffic-capture toggle).
 	m.trafficOn = pg.GetBool(settingTrafficCapture, false)
+	if m.traffic != nil {
+		m.traffic.SetRecordingEnabled(m.trafficOn)
+		if err := m.applyTrafficDiskSettings(pg); err != nil {
+			_ = m.traffic.Close()
+			_ = pg.Close()
+			return nil, fmt.Errorf("load traffic disk settings: %w", err)
+		}
+		go func(tr *traffic.Traffic) {
+			log.Printf("[traffic] recording proxy on %s (set HTTP_PROXY=%s + trust _ca CA)", proxyAddr, tr.ProxyAddr())
+			if err := tr.Start(); err != nil {
+				log.Printf("[traffic] proxy stopped: %v", err)
+			}
+		}(m.traffic)
+	}
 	// LLM 录制开关（默认关）。录制器每次调用时读取此标志。
 	m.llmRecOn = pg.GetBool(settingLLMRecord, false)
 	// Load persisted web-search config (default: off, ddgs).
@@ -439,10 +520,49 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 			log.Printf("[proxy] 全局代理 %q 无效，已忽略: %v", m.globalProxy, err)
 		}
 	}
+	// Smart proxy: per-request selection of the proxy pool for hosts the agent
+	// marked as WAF-blocked. Built after the global proxy so the two coexist
+	// (the smart list takes precedence for marked hosts).
+	m.smart = traffic.NewSmartProxy()
+	if v, ok, _ := pg.GetSetting(settingSmartProxyPool); ok {
+		m.smartProxyPool = strings.TrimSpace(v)
+		if err := m.smart.SetPool(m.smartProxyPool); err != nil {
+			log.Printf("[smart-proxy] 代理池 %q 无效，已忽略: %v", m.smartProxyPool, err)
+		}
+	}
+	if raw, ok, _ := pg.GetSetting(settingSmartProxyHosts); ok && strings.TrimSpace(raw) != "" {
+		var hosts []traffic.SmartProxyHost
+		if err := json.Unmarshal([]byte(raw), &hosts); err != nil {
+			log.Printf("[smart-proxy] 名单 JSON 无效，已忽略: %v", err)
+		} else {
+			for _, h := range hosts {
+				m.smart.Mark(h.TaskID, h.Host, h.Reason, h.Source, h.AgentKey)
+			}
+		}
+	}
+	if pg.GetBool(settingSmartProxy, false) {
+		m.smart.SetEnabled(true)
+	}
+	// Persist on every mutation. Without this hook, a mark made by an agent lived
+	// only in memory: after a restart the list was empty, marked hosts silently
+	// reverted to direct dialing, and the failure looked like a broken proxy.
+	m.smart.SetOnChange(func(hosts []traffic.SmartProxyHost) {
+		raw, err := json.Marshal(hosts)
+		if err != nil {
+			log.Printf("[smart-proxy] 序列化名单失败: %v", err)
+			return
+		}
+		if err := m.pg.SetSetting(settingSmartProxyHosts, string(raw)); err != nil {
+			log.Printf("[smart-proxy] 保存名单失败: %v", err)
+		}
+	})
+	if m.traffic != nil {
+		m.traffic.SetSmartProxy(m.smart)
+	}
 	m.enrich = enrich.New(m.assets, m.ProxyAddr, 4)
-	// Reconcile the seeded browser MCP with the persisted capture state, so a
+	// Reconcile the seeded Playwright MCP with the persisted capture state, so a
 	// restart with capture already on keeps Playwright routed through the proxy.
-	m.syncBrowserMCPProxy()
+	m.syncPlaywrightMCPProxy()
 	return m, nil
 }
 
@@ -463,12 +583,115 @@ func (m *Manager) SetTrafficEnabled(on bool) error {
 	m.mu.Lock()
 	m.trafficOn = on
 	m.mu.Unlock()
-	// Inject (on) or strip (off) the recording proxy + CA on the browser MCP so
+	if m.traffic != nil {
+		m.traffic.SetRecordingEnabled(on)
+	}
+	// Inject (on) or strip (off) the recording proxy + CA on the Playwright MCP so
 	// Playwright routes through the MITM. Must run after the flag flip above, since
 	// ProxyAddr/ProxyCACert honor it. putSettings rebuilds agents next (applyLLM),
 	// which re-spawns the MCP with the new args/env.
-	m.syncBrowserMCPProxy()
+	m.syncPlaywrightMCPProxy()
 	return nil
+}
+
+// applyTrafficDiskSettings pushes the disk-saving knobs (static-asset filter,
+// retention window) from persisted settings into the recorder.
+func (m *Manager) applyTrafficDiskSettings(pg *pgdb.DB) error {
+	if m.traffic == nil {
+		return nil
+	}
+	staticValue, staticOK, err := pg.GetSetting(settingTrafficSkipStatic)
+	if err != nil {
+		return err
+	}
+	typesValue, _, err := pg.GetSetting(settingTrafficSkipTypes)
+	if err != nil {
+		return err
+	}
+	retentionValue, ok, err := pg.GetSetting(settingTrafficRetentionDays)
+	if err != nil {
+		return err
+	}
+	days := int64(0) // Missing settings on upgraded installations must never delete history.
+	if ok {
+		days, err = strconv.ParseInt(strings.TrimSpace(retentionValue), 10, 64)
+		if err != nil || days < 0 || days > 3650 {
+			return fmt.Errorf("invalid traffic retention setting %q", retentionValue)
+		}
+	}
+	m.traffic.SetSkipStatic(!staticOK || staticValue == "true" || staticValue == "1")
+	if strings.TrimSpace(typesValue) != "" {
+		v := typesValue
+		m.traffic.SetSkipRules(strings.Split(v, ","))
+	} else {
+		m.traffic.SetSkipRules(nil)
+	}
+	m.traffic.SetRetention(days)
+	return nil
+}
+
+// SetTrafficDiskSettings persists and applies any of the traffic disk knobs.
+// Each argument is optional (nil = leave unchanged); an empty skip-types string
+// restores the built-in default list.
+func (m *Manager) SetTrafficDiskSettings(skipStatic *bool, skipTypes *string, retentionDays *int64) error {
+	m.trafficDiskMu.Lock()
+	defer m.trafficDiskMu.Unlock()
+	if retentionDays != nil && (*retentionDays < 0 || *retentionDays > 3650) {
+		return fmt.Errorf("流量保留天数必须为 0 或 1–3650")
+	}
+	values := make(map[string]string)
+	if skipStatic != nil {
+		values[settingTrafficSkipStatic] = strconv.FormatBool(*skipStatic)
+	}
+	if skipTypes != nil {
+		values[settingTrafficSkipTypes] = strings.TrimSpace(*skipTypes)
+	}
+	if retentionDays != nil {
+		values[settingTrafficRetentionDays] = strconv.FormatInt(*retentionDays, 10)
+	}
+	if err := m.pg.SetSettingsAtomic(values); err != nil {
+		return err
+	}
+	if m.traffic != nil {
+		if skipStatic != nil {
+			m.traffic.SetSkipStatic(*skipStatic)
+		}
+		if skipTypes != nil {
+			if rules := strings.TrimSpace(*skipTypes); rules != "" {
+				m.traffic.SetSkipRules(strings.Split(rules, ","))
+			} else {
+				m.traffic.SetSkipRules(nil)
+			}
+		}
+		if retentionDays != nil {
+			m.traffic.SetRetention(*retentionDays)
+		}
+	}
+	return nil
+}
+
+// TrafficSkipRules reports the effective static-skip rule list for the UI.
+func (m *Manager) TrafficSkipRules() []string {
+	if m.traffic == nil {
+		return nil
+	}
+	return m.traffic.SkipRules()
+}
+
+// TrafficRetentionDays reports the retention window in days (0 = keep forever).
+func (m *Manager) TrafficRetentionDays() int64 {
+	if m.traffic == nil {
+		v, ok, err := m.pg.GetSetting(settingTrafficRetentionDays)
+		if err != nil || !ok {
+			return 0
+		}
+		days, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err != nil || days < 0 || days > 3650 {
+			return 0
+		}
+		return days
+	}
+	return m.traffic.RetentionDays()
 }
 
 // LLMRecordEnabled reports whether LLM request/response recording is on
@@ -503,6 +726,109 @@ func (m *Manager) NoaCompactionEnabled() bool {
 // the resolver reads it per run, so no rebuild is needed.
 func (m *Manager) SetNoaCompaction(on bool) error {
 	return m.pg.SetBool(settingNoaCompaction, on)
+}
+
+// PlannerOverviewMode returns "full" or "lean" for the planner's per-round
+// situation projection. Default is full. SERIES_PLANNER_OVERVIEW lets an
+// isolated test instance force a mode without touching its database.
+func (m *Manager) PlannerOverviewMode() string {
+	if v := strings.TrimSpace(os.Getenv("SERIES_PLANNER_OVERVIEW")); v != "" {
+		if strings.EqualFold(v, "lean") {
+			return "lean"
+		}
+		return "full"
+	}
+	v, ok, err := m.pg.GetSetting(settingPlannerOverviewMode)
+	if err != nil || !ok {
+		return "full"
+	}
+	if strings.EqualFold(strings.TrimSpace(v), "lean") {
+		return "lean"
+	}
+	return "full"
+}
+
+// SetPlannerOverviewMode persists the experimental planner projection mode.
+// The planner reads it per round, so no agent rebuild is needed.
+func (m *Manager) SetPlannerOverviewMode(mode string) error {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "full" && mode != "lean" {
+		return fmt.Errorf("planner_overview_mode 必须是 full 或 lean")
+	}
+	return m.pg.SetSetting(settingPlannerOverviewMode, mode)
+}
+
+// PlannerOverviewConfig returns the editable numerical limits for both
+// presets. Missing/corrupt JSON falls back to the built-in defaults. When
+// SERIES_PLANNER_OVERVIEW is set (isolated benchmark), custom values are
+// ignored so the A/B comparison is deterministic.
+func (m *Manager) PlannerOverviewConfig() agent.OverviewConfig {
+	if v := strings.TrimSpace(os.Getenv("SERIES_PLANNER_OVERVIEW")); v != "" {
+		return agent.DefaultOverviewConfig()
+	}
+	raw, ok, err := m.pg.GetSetting(settingPlannerOverviewConfig)
+	if err != nil || !ok || strings.TrimSpace(raw) == "" {
+		return agent.DefaultOverviewConfig()
+	}
+	var cfg agent.OverviewConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		log.Printf("[settings] planner_overview_config 解析失败，使用默认值: %v", err)
+		return agent.DefaultOverviewConfig()
+	}
+	return cfg.Normalize()
+}
+
+// SetPlannerOverviewConfig validates and persists both presets. The planner
+// reads the normalized value once per planning round.
+func (m *Manager) SetPlannerOverviewConfig(cfg agent.OverviewConfig) error {
+	if err := agent.ValidateOverviewConfig(cfg); err != nil {
+		return err
+	}
+	cfg = cfg.Normalize()
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return m.pg.SetSetting(settingPlannerOverviewConfig, string(raw))
+}
+
+// ContextPolicyConfig returns the custom context-compression lines (tool-result
+// clear line / history summary line). Missing, corrupt or env-locked values fall
+// back to the built-in window-derived defaults, so an unconfigured install keeps
+// the exact previous behaviour. When SERIES_CONTEXT_POLICY is set (isolated
+// benchmark) custom values are ignored so an A/B run is deterministic.
+func (m *Manager) ContextPolicyConfig() agent.ContextPolicyConfig {
+	if agent.ContextPolicyEnvLocked() {
+		return agent.DefaultContextPolicyConfig()
+	}
+	if m.pg == nil {
+		return agent.DefaultContextPolicyConfig()
+	}
+	raw, ok, err := m.pg.GetSetting(settingContextPolicyConfig)
+	if err != nil || !ok {
+		return agent.DefaultContextPolicyConfig()
+	}
+	cfg, _ := agent.ParseContextPolicy(raw)
+	return cfg
+}
+
+// SetContextPolicyConfig validates and persists the custom lines. Agents read the
+// normalized value once per run, so a change applies to the next run without
+// rebuilding the LLM chain.
+func (m *Manager) SetContextPolicyConfig(cfg agent.ContextPolicyConfig) error {
+	if err := agent.ValidateContextPolicyConfig(cfg); err != nil {
+		return err
+	}
+	cfg = cfg.Normalize()
+	if cfg.IsZero() {
+		// 全零 = 恢复内置默认：直接清掉设置键，避免留下一个"看着像配置"的空对象。
+		return m.pg.SetSetting(settingContextPolicyConfig, "")
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return m.pg.SetSetting(settingContextPolicyConfig, string(raw))
 }
 
 // LLMPoolEnabled reports whether LLM failover ("轮询") is on (默认关；
@@ -628,27 +954,39 @@ func (m *Manager) SetWebSearch(on bool, backend string, braveKey, tavilyKey, pro
 	return nil
 }
 
-// browserMCPName is the seeded Playwright MCP whose proxy args + CA env are kept
-// in sync with the traffic-capture toggle.
-const browserMCPName = "browser"
+// playwrightMCPName is the canonical built-in Playwright MCP. The legacy name
+// remains a read fallback for databases where both rows existed during migration.
+const (
+	playwrightMCPName    = "playwright"
+	legacyBrowserMCPName = "browser"
+	// browserMCPName is kept as a source-compatible alias for older in-package
+	// tests and integrations; new code should use playwrightMCPName.
+	browserMCPName = legacyBrowserMCPName
+)
 
-// syncBrowserMCPProxy reconciles the seeded browser MCP's proxy args + CA env with
+// syncPlaywrightMCPProxy reconciles the seeded Playwright MCP's proxy args + CA env with
 // the current traffic-capture state: capture on → route Playwright through the
 // recording proxy (--proxy-server) and trust its MITM CA (NODE_EXTRA_CA_CERTS);
 // capture off → strip both. Idempotent, and a no-op if the user deleted/renamed the
 // MCP. Must be called WITHOUT m.mu held (ProxyAddr/ProxyCACert take the lock).
-func (m *Manager) syncBrowserMCPProxy() {
+func (m *Manager) syncPlaywrightMCPProxy() {
 	servers, err := m.pg.ListMCP()
 	if err != nil {
-		log.Printf("[mcp] browser 代理同步: 读取 MCP 列表失败: %v", err)
+		log.Printf("[mcp] playwright 代理同步: 读取 MCP 列表失败: %v", err)
 		return
 	}
-	var srv *pgdb.MCPServer
+	var srv, legacy *pgdb.MCPServer
 	for _, s := range servers {
-		if s.Name == browserMCPName {
+		if s.Name == playwrightMCPName {
 			srv = s
 			break
 		}
+		if s.Name == legacyBrowserMCPName {
+			legacy = s
+		}
+	}
+	if srv == nil {
+		srv = legacy
 	}
 	if srv == nil {
 		return // user removed/renamed it — leave it alone
@@ -669,13 +1007,13 @@ func (m *Manager) syncBrowserMCPProxy() {
 	srv.Args = encodeJSON(args)
 	srv.Env = encodeJSON(env)
 	if _, err := m.pg.SaveMCP(srv); err != nil {
-		log.Printf("[mcp] browser 代理同步失败: %v", err)
+		log.Printf("[mcp] playwright 代理同步失败: %v", err)
 		return
 	}
 	if proxy != "" {
-		log.Printf("[mcp] browser MCP 已挂捕获代理 %s (CA %s)", proxy, cert)
+		log.Printf("[mcp] playwright MCP 已挂捕获代理 %s (CA %s)", proxy, cert)
 	} else {
-		log.Printf("[mcp] browser MCP 已移除捕获代理配置")
+		log.Printf("[mcp] playwright MCP 已移除捕获代理配置")
 	}
 }
 
@@ -766,6 +1104,25 @@ func (m *Manager) ProxyCACert() string {
 	return m.traffic.CACertPath()
 }
 
+// TaskProxyAddr keeps task-bound HTTP traffic behind SERIES's local policy proxy
+// even when traffic persistence is disabled. Independent chats continue to use
+// ProxyAddr and therefore have no task asset policy.
+func (m *Manager) TaskProxyAddr() string {
+	if m.traffic != nil {
+		return m.traffic.ProxyAddr()
+	}
+	return m.ProxyAddr()
+}
+
+// TaskProxyCACert is the CA required by TaskProxyAddr's local MITM. It is
+// intentionally independent from the traffic-capture toggle.
+func (m *Manager) TaskProxyCACert() string {
+	if m.traffic != nil {
+		return m.traffic.CACertPath()
+	}
+	return m.ProxyCACert()
+}
+
 // GlobalProxy returns the configured global egress proxy URL (empty = direct).
 func (m *Manager) GlobalProxy() string {
 	m.mu.RLock()
@@ -795,8 +1152,8 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 			return err
 		}
 	}
-	// Keep the browser MCP's egress in sync with the new global proxy too.
-	m.syncBrowserMCPProxy()
+	// Keep the Playwright MCP's egress in sync with the new global proxy too.
+	m.syncPlaywrightMCPProxy()
 	return nil
 }
 
@@ -844,8 +1201,10 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 		SourceTaskIDs:  append([]int64(nil), pt.SourceTaskIDs...),
 		CompanyIDs:     append([]int64(nil), pt.CompanyIDs...),
 		TimeoutSeconds: pt.TimeoutSeconds, PlanHeartbeatSeconds: pt.PlanHeartbeatSeconds,
-		CoverageEnabled: pt.CoverageEnabled,
-		FirstRunAt:      unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
+		CoverageEnabled:       pt.CoverageEnabled,
+		AssetApprovalTemplate: pt.AssetApprovalTemplate,
+		ExecutionMode:         pt.ExecutionMode,
+		FirstRunAt:            unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
 		Store: store, Guard: guard.NewWithInterceptor(ic), notify: make(chan struct{}, 1),
 	}
 }
@@ -1187,8 +1546,11 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 	    END,
 	    deadline_at=CASE
 	        WHEN $6='timeout' AND $2 NOT IN ('done','failed','timeout') THEN NULL
+	        -- 暂停不烧超时预算：恢复时把截止时刻顺延整个暂停时长（仅带时限且确实暂停过）。
+	        WHEN paused_at IS NOT NULL AND deadline_at IS NOT NULL THEN deadline_at + (now() - paused_at)
 	        ELSE deadline_at
-	    END
+	    END,
+	    paused_at=NULL
 	WHERE id=$1 AND deleted_at IS NULL AND status=$6
 	RETURNING queued_at, queue_mode, completed_at, first_run_at, deadline_at`, n, status, queued, mode, preservePosition, expectedStatus).
 		Scan(&queuedAt, &committedMode, &completedAt, &firstRunAt, &deadlineAt)
@@ -1241,7 +1603,7 @@ func (m *Manager) ApplyTaskPause(id string) error {
 	}
 	var mode string
 	err = m.pg.QueryRow(`UPDATE tasks
-		SET paused=true, queued=false, queued_at=NULL
+		SET paused=true, paused_at=now(), queued=false, queued_at=NULL
 		WHERE id=$1 AND deleted_at IS NULL AND paused=false
 		  AND status NOT IN ('done','failed','timeout')
 		RETURNING COALESCE(queue_mode,'')`, n).Scan(&mode)
@@ -1506,6 +1868,9 @@ func (m *Manager) DeleteTask(id string, opts DeleteTaskOptions) (DeleteTaskResul
 		}
 	}
 	m.forgetTask(id, n)
+	// Task-scoped smart-proxy marks must not outlive a genuinely deleted task, or
+	// they linger in the settings list with no task to remove them by.
+	m.clearSmartProxyMarks(n)
 	if err := errors.Join(finalizeErrs...); err != nil {
 		return result, &taskDeleteCommittedError{err: err}
 	}
@@ -1749,10 +2114,31 @@ func (m *Manager) List() []*Task {
 // Notify signals that the asset/exploration graph changed (debounced consumer
 // wakes the planner). Non-blocking.
 func (t *Task) Notify() {
+	t.wakeWorkers()
 	select {
 	case t.notify <- struct{}{}:
 	default:
 	}
+}
+
+// Each waiter captures a generation before checking the frontier. Closing that
+// generation broadcasts changes without stealing the Planner's notification.
+func (t *Task) workerSignal() <-chan struct{} {
+	t.workerWakeMu.Lock()
+	defer t.workerWakeMu.Unlock()
+	if t.workerWake == nil {
+		t.workerWake = make(chan struct{})
+	}
+	return t.workerWake
+}
+
+func (t *Task) wakeWorkers() {
+	t.workerWakeMu.Lock()
+	defer t.workerWakeMu.Unlock()
+	if t.workerWake != nil {
+		close(t.workerWake)
+	}
+	t.workerWake = make(chan struct{})
 }
 
 // NotifyDone is Notify plus a hint: a worker just finished intentID and that is
@@ -1770,9 +2156,9 @@ func (t *Task) NotifyDone(intentID int64) {
 
 // NotifyFinding records that a worker reported a finding on intentID (summary),
 // then wakes the planner — so the round spells out which intent found what.
-func (t *Task) NotifyFinding(intentID int64, summary string) {
+func (t *Task) NotifyFinding(intentID int64, summary string, nodeIDs ...int64) {
 	t.trigMu.Lock()
-	t.pendingTriggers = append(t.pendingTriggers, agent.TriggerEvent{Kind: "finding", IntentID: intentID, Detail: summary})
+	t.pendingTriggers = append(t.pendingTriggers, agent.TriggerEvent{Kind: "finding", IntentID: intentID, Detail: summary, NodeIDs: append([]int64(nil), nodeIDs...)})
 	t.trigMu.Unlock()
 	t.Notify()
 }
@@ -1836,15 +2222,13 @@ func (t *Task) NotifyGoalEdited(oldText, newText string) {
 	t.Notify()
 }
 
-// NotifyCancelled records that the human deleted intentID (reason = 删除原因), then
+// NotifyCancelled records that the human cancelled intentID (reason = 取消原因), then
 // wakes the planner so the next round spells out which intent was removed and why.
-// summary is the intent's text captured before deletion — needed for hard delete,
-// where the node is gone by the time the planner reads the trigger. Applies to both
-// soft (state='deleted') and hard (physical cascade) delete.
-func (t *Task) NotifyCancelled(intentID int64, summary, reason string) {
+// The intent is stopped (not deleted); the reason is attached to it as a fact.
+func (t *Task) NotifyCancelled(intentID int64, reason string) {
 	if intentID > 0 {
 		t.trigMu.Lock()
-		t.pendingTriggers = append(t.pendingTriggers, agent.TriggerEvent{Kind: "cancelled", IntentID: intentID, Summary: summary, Detail: reason})
+		t.pendingTriggers = append(t.pendingTriggers, agent.TriggerEvent{Kind: "cancelled", IntentID: intentID, Detail: reason})
 		t.trigMu.Unlock()
 	}
 	t.Notify()
@@ -1857,4 +2241,45 @@ func (t *Task) drainTriggers() []agent.TriggerEvent {
 	ev := t.pendingTriggers
 	t.pendingTriggers = nil
 	return ev
+}
+
+func (t *Task) hasPendingTriggers() bool {
+	t.trigMu.Lock()
+	defer t.trigMu.Unlock()
+	return len(t.pendingTriggers) > 0
+}
+
+// NotifyFindingDeleted only wakes the planner; it never wakes or resumes workers.
+func (t *Task) NotifyFindingDeleted(feedbackID int64) {
+	if feedbackID <= 0 {
+		return
+	}
+	state := t.lifecycleSnapshot()
+	if isTerminalStatus(state.Status) || state.Status == "paused" || state.Paused || state.Queued {
+		return
+	}
+	t.trigMu.Lock()
+	t.pendingTriggers = append(t.pendingTriggers, agent.TriggerEvent{Kind: "finding_deleted", FeedbackID: feedbackID})
+	t.trigMu.Unlock()
+	select {
+	case t.notify <- struct{}{}:
+	default:
+	}
+}
+
+// NotifyNodes carries identities from the successful write, never guesses IDs by text.
+func (t *Task) NotifyNodes(kind string, ids []int64) {
+	clean := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			clean = append(clean, id)
+		}
+	}
+	if len(clean) == 0 {
+		return
+	}
+	t.trigMu.Lock()
+	t.pendingTriggers = append(t.pendingTriggers, agent.TriggerEvent{Kind: kind, NodeIDs: clean})
+	t.trigMu.Unlock()
+	t.Notify()
 }

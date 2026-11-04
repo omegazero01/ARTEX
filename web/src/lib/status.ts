@@ -40,10 +40,8 @@ const intent: Record<string, StatusMeta> = {
   blocked: { label: "执行出错", tone: "red" },
   // exhausted = 达到步数/时间预算被中途掐断、只写回部分结果（非方向已探尽）。
   exhausted: { label: "预算耗尽", tone: "violet" },
-  // stopped = 历史软删除状态（保留,历史数据）。
+  // stopped = 用户手动删除/停止了该 work（保留已产出的事实）。
   stopped: { label: "已停止", tone: "slate" },
-  // deleted = 用户假删除了该意图（保留节点与血缘，删除原因见 delete_reason 字段）。
-  deleted: { label: "已删除", tone: "slate" },
 };
 
 const task: Record<string, StatusMeta> = {
@@ -99,16 +97,6 @@ const node: Record<string, StatusMeta> = {
   tombstoned: { label: "废弃", tone: "neutral" },
 };
 
-// 推送投递状态。sending 用 blue 而不是 amber：它不是「有问题」，
-// 而是「已被领取、正在发」，与 pending 的等待语义要能区分开。
-const delivery: Record<string, StatusMeta> = {
-  pending: { label: "待发送", tone: "amber" },
-  sending: { label: "发送中", tone: "blue" },
-  sent: { label: "已送达", tone: "green" },
-  failed: { label: "失败", tone: "red" },
-  skipped: { label: "已跳过", tone: "neutral" },
-};
-
 const maps = {
   intent,
   task,
@@ -118,7 +106,6 @@ const maps = {
   goal,
   audit,
   node,
-  delivery,
 } as const;
 
 export type StatusDomain = keyof typeof maps;

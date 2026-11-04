@@ -1,3 +1,4 @@
+import { entryAwareFetch } from "@/lib/http-auth";
 // Real backend client. /api/* is proxied to the Go backend (next.config rewrites).
 // Returns the domain types in lib/types.ts. Shapes match the backend handlers;
 // a few fields the backend serializes differently (e.g. created_at as a unix int)
@@ -6,16 +7,34 @@
 import type { ChatMention } from "@/lib/chat-mentions";
 import { MOCK } from "@/lib/mock/enabled";
 import { mockHandle } from "@/lib/mock/handler";
+import type { NotificationQuery, NotificationSummary } from "@/lib/task-notifications";
+import {
+  parseToolCallPage,
+  type ToolCallFilter,
+  type ToolCallPage,
+  type ToolCallText,
+  toolCallURL,
+} from "@/lib/tool-calls";
 import type {
   ActiveFindingRetest,
   Activity,
   Agent,
   AgentDetail,
   AgentTrigger,
+  AllianceEndpoint,
+  AllianceEvidenceItem,
+  AllianceFeedbackRun,
+  AllianceProfile,
+  AllianceProfileDocument,
+  AllianceRevision,
+  AllianceSuggestion,
+  AllianceTaskReading,
+  AllianceTaskSnapshot,
+  AllianceStats,
+  AllianceSystem,
+  AllianceSystemInput,
   ArchiveBatchItem,
   Asset,
-  AssetInterceptRule,
-  AssetInterceptRuleInput,
   Audit,
   BatchCategoryItem,
   BatchControlItem,
@@ -43,9 +62,12 @@ import type {
   FindingRetest,
   FindingStats,
   FindingStatus,
+  FindingSuppressionRule,
   FindingsPage,
   FindingTraffic,
   FindingTrafficDetail,
+  GlobalProxyProbeResult,
+  HTTPAuthSettings,
   IntentAsset,
   InterceptApprovalFilter,
   InterceptApprovalRow,
@@ -53,7 +75,6 @@ import type {
   InterceptPending,
   InterceptRule,
   JudgeConfig,
-  JudgeUsage,
   LLMPoolStatus,
   LLMProfile,
   LLMRecordDetail,
@@ -61,14 +82,14 @@ import type {
   LLMRetryOverride,
   LLMRetryPolicy,
   LLMTask,
+  MCPCall,
+  MCPImportResult,
   MCPServer,
+  MCPTestResult,
   MCPTool,
+  MCPUsageStat,
   MissingSkill,
   ModelTokenStat,
-  NotificationChannel,
-  NotificationDelivery,
-  NotificationFilter,
-  NotificationMeta,
   PromptVar,
   PromptVersion,
   SessionTokenUsage,
@@ -76,16 +97,18 @@ import type {
   Severity,
   SkillCall,
   SkillItem,
-  SSProject,
-  SSTask,
+  SmartProxyHost,
   Stats,
   Task,
   TaskArchive,
   TaskArchivePage,
+  TaskAssetApproval,
+  TaskAssetApprovalMutation,
   TaskAssetMutation,
   TaskAssetScopeMutation,
   TaskCategory,
   TaskConstraint,
+  TaskFindingFilters,
   TaskGoal,
   TaskLLMResolutions,
   TaskNode,
@@ -100,32 +123,29 @@ import type {
   TrafficEvidenceRole,
   TrafficHost,
   TrafficResp,
-  UpdateCheck,
   UsageStats,
-  WorkspaceFile,
-  WorkspaceListing,
 } from "@/lib/types";
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("artex_token");
+  return localStorage.getItem("series_token");
 }
 
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   if (MOCK) return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
   const token = getToken();
-  const r = await fetch(`/api${path}`, {
+  const r = await entryAwareFetch(`/api${path}`, {
     ...init,
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(token ? { "X-Series-Token": token } : {}),
       ...(init?.headers as Record<string, string> | undefined),
     },
   });
   if (r.status === 401) {
     if (typeof window !== "undefined") {
-      localStorage.removeItem("artex_token");
-      document.cookie = "artex_token=; path=/; max-age=0";
+      localStorage.removeItem("series_token");
+      document.cookie = "series_token=; path=/; max-age=0";
       window.location.href = "/login";
     }
     throw new Error("未授权");
@@ -163,29 +183,6 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
 //
 // Override either default with NEXT_PUBLIC_SSE_BASE (set it to "" to force same-origin).
 // Token is appended as ?token= because SSE can't carry cookies cross-origin.
-// mockReport returns a canned Markdown report for the demo.
-function mockReport(_task?: string): string {
-  return `# ARTEX 渗透测试报告 — Acme Corp
-
-## 概览
-- 范围：acme.com（含 www / admin / api / shop / vpn 子域）
-- 已确认发现：6 项（高危 3 · 中危 3 · 低危 2）
-- 引擎模式：exploring
-
-## 关键发现
-1. **[高] 后台默认口令** admin.acme.com admin/admin123 → 可完全接管后台。
-2. **[高] SQL 注入** www.acme.com/search?q= → 可读取 acme_prod 库。
-3. **[高] IDOR** api.acme.com/v1/orders?id= → 可越权读取他人订单（含手机号/地址）。
-4. **[中] 反射型 XSS**、**暴露 .git 源码**、**登录无速率限制**。
-
-## 建议
-- 后台强制改密 + 启用 MFA、封禁默认口令。
-- search 接口参数化查询、输出编码。
-- API 增加对象级授权校验（IDOR）、更换强 JWT 密钥。
-
-> （demo）本报告由 mock 数据生成，仅用于界面演示。`;
-}
-
 export function sseUrl(path: string): string {
   const base =
     process.env.NEXT_PUBLIC_SSE_BASE ??
@@ -197,7 +194,7 @@ export function sseUrl(path: string): string {
   return token ? `${base}${path}${sep}token=${encodeURIComponent(token)}` : `${base}${path}`;
 }
 
-const get = <T>(p: string) => http<T>(p);
+const get = <T>(p: string, init?: RequestInit) => http<T>(p, init);
 const post = <T>(p: string, body?: unknown) =>
   http<T>(p, { method: "POST", body: body ? JSON.stringify(body) : undefined });
 const put = <T>(p: string, body?: unknown) =>
@@ -233,6 +230,15 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
 }
 
 export const api = {
+  taskNotifications: (queries: NotificationQuery[], mode: "all" | "findings", signal?: AbortSignal) =>
+    get<NotificationSummary>(
+      `/tasks/notifications?${new URLSearchParams({ queries: JSON.stringify(queries), mode })}`,
+      { signal },
+    ),
+  toolCalls: (base: string, filters: ToolCallFilter, signal?: AbortSignal) =>
+    get<ToolCallPage>(toolCallURL(base, filters), { signal }).then(parseToolCallPage),
+  toolCallDetail: (base: string, id: number, offset: number, signal?: AbortSignal) =>
+    get<ToolCallText>(toolCallURL(base, {}, id, offset), { signal }),
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
   health: () => get<{ ok: boolean; service: string; version: string }>("/health"),
 
@@ -248,6 +254,7 @@ export const api = {
     get<{ tasks: Task[]; active: string }>("/tasks").then((r) => ({ tasks: arr(r.tasks), active: r.active ?? "" })),
   task: (id: string) => get<Task>(`/tasks/${encodeURIComponent(id)}`),
   createTask: (input: {
+    assetApprovalTemplate?: import("./types").AssetApprovalTemplate;
     name?: string;
     categoryId?: number;
     description: string;
@@ -255,11 +262,12 @@ export const api = {
     llmProfileIds?: number[];
     sourceTaskIds?: string[];
     companyIds?: number[];
+    assetIds?: number[];
+    allianceSystemIds?: number[];
     timeoutSeconds?: number;
     seedFirstIntent?: boolean;
     planHeartbeatSeconds?: number;
     coverageEnabled?: boolean;
-    interceptRules?: AssetInterceptRuleInput[];
   }) =>
     post<Task>("/tasks", {
       name: input.name ?? "",
@@ -269,11 +277,13 @@ export const api = {
       llm_profile_ids: input.llmProfileIds ?? [],
       source_task_ids: input.sourceTaskIds ?? [],
       company_ids: input.companyIds ?? [],
+      asset_ids: input.assetIds ?? [],
+      alliance_system_ids: input.allianceSystemIds ?? [],
+      asset_approval_template: input.assetApprovalTemplate ?? "all_assets",
       timeout_seconds: input.timeoutSeconds ?? 0,
       seed_first_intent: input.seedFirstIntent ?? false,
       plan_heartbeat_seconds: input.planHeartbeatSeconds ?? 0, // 0 = 后端归一到默认 600(10min)
       coverage_enabled: input.coverageEnabled ?? true, // 默认开;false=关闭资产覆盖度功能
-      intercept_rules: input.interceptRules ?? [], // 任务级资产拦截规则
     }),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   updateTask: (id: string, input: { name?: string; pinned?: boolean }) => patch<Task>(`/tasks/${id}`, input),
@@ -291,13 +301,10 @@ export const api = {
       category_id: categoryId ?? null,
     }),
   taskTemplates: () => get<{ templates: TaskTemplate[] }>("/task-templates").then((r) => arr(r.templates)),
-  createTaskTemplate: (
-    input: Pick<TaskTemplate, "name" | "description" | "goal" | "category_id" | "intercept_rules">,
-  ) => post<TaskTemplate>("/task-templates", input),
-  updateTaskTemplate: (
-    id: number,
-    input: Partial<Pick<TaskTemplate, "name" | "description" | "goal" | "category_id" | "intercept_rules">>,
-  ) => patch<TaskTemplate>(`/task-templates/${id}`, input),
+  createTaskTemplate: (input: Pick<TaskTemplate, "name" | "description" | "goal">) =>
+    post<TaskTemplate>("/task-templates", input),
+  updateTaskTemplate: (id: number, input: Partial<Pick<TaskTemplate, "name" | "description" | "goal">>) =>
+    patch<TaskTemplate>(`/task-templates/${id}`, input),
   deleteTaskTemplate: (id: number) => del<{ deleted: number }>(`/task-templates/${id}`),
   updateTaskLLMProfiles: (id: string, llmProfileIds: number[], activeLLMProfileId?: number) =>
     put<{
@@ -312,7 +319,7 @@ export const api = {
       active_llm_profile_id: activeLLMProfileId ?? null,
     }),
   deleteTask: (id: string, options: DeleteTaskOptions) => del<DeleteTaskResult>(`/tasks/${id}`, options),
-  controlTask: (id: string, action: "pause" | "resume") =>
+  controlTask: (id: string, action: "pause" | "resume" | "finish") =>
     post<{ id: string; paused: boolean; queued: boolean; status: string }>(`/tasks/${id}/control`, { action }),
   controlTasksBatch: (taskIds: string[], action: "pause" | "resume") =>
     post<{ items: BatchControlItem[] }>("/tasks/control/batch", { task_ids: taskIds, action }),
@@ -337,19 +344,36 @@ export const api = {
   deleteTaskArchive: (id: number) => del<TaskArchive>(`/task-archives/${id}`),
   deleteTaskArchives: (archiveIds: number[]) =>
     post<{ items: ArchiveBatchItem[] }>("/task-archives/delete/batch", { archive_ids: archiveIds }),
-  controlIntent: (
-    taskId: string,
-    intentId: string,
-    action: "pause" | "resume" | "cancel",
-    reason?: string,
-    // cancel 专用:soft(默认,假删除,意图置 deleted + 记删除原因)| hard(真删除,级联移除独占子孙)。
-    mode?: "soft" | "hard",
-  ) =>
+  deleteWorker: (taskId: string, intentId: string) =>
+    del<{ id: string; deleted: boolean }>(`/tasks/${taskId}/intents/${intentId}`),
+  setExecutionMode: (id: string, execution_mode: "managed" | "manual") =>
+    patch<Task>(`/tasks/${id}/execution-mode`, { execution_mode }),
+  dispatchIntents: (id: string, intent_ids: string[]) =>
+    post<{ results: { id: number | string; status: string; error?: string }[] }>(`/tasks/${id}/intents/dispatch`, {
+      intent_ids,
+    }),
+  workerQueue: (taskId: string) =>
+    get<{ items: TaskNode[]; version: number; manual: boolean; execution_mode?: "managed" | "manual" }>(
+      `/tasks/${taskId}/worker-queue`,
+    ),
+  moveWorker: (taskId: string, id: string, beforeId: string | null, version: number) =>
+    post<{ items: TaskNode[]; version: number; manual: boolean; execution_mode?: "managed" | "manual" }>(
+      `/tasks/${taskId}/worker-queue/move`,
+      {
+        id,
+        before_id: beforeId,
+        version,
+      },
+    ),
+  controlIntent: (taskId: string, intentId: string, action: "pause" | "resume" | "cancel", reason?: string) =>
     post<{
       id: number;
-      state: "paused" | "open" | "deleted" | "";
+      state: "paused" | "open" | "stopped";
+      cancelled_by_user: boolean;
+      cancel_reason?: string;
+      queued?: boolean;
       deleted?: { intents: number; facts: number; findings: number; activities: number };
-    }>(`/tasks/${taskId}/intents/${intentId}/control`, { action, reason: reason ?? "", mode: mode ?? "soft" }),
+    }>(`/tasks/${taskId}/intents/${intentId}/control`, { action, reason: reason ?? "" }),
   sendWorkerMessage: (taskId: string, intentId: string, message: string, requestId: string) =>
     post<{
       id: number;
@@ -365,7 +389,7 @@ export const api = {
   rerunBlocked: (taskId: string) => post<{ id: string; reopened: number }>(`/tasks/${taskId}/intents/rerun-blocked`),
   setActive: (id: string) => post<{ active: string }>("/active", { id }),
   // ---- stats ----
-  stats: (task?: string) => get<Stats>(`/stats${tq(task)}`),
+  stats: (task?: string) => get<Stats>(`/stats${tq(task)}${task ? "&compact=1" : ""}`),
   // 资产测试覆盖度(粗估，供参考)：范围内资产被 fact 碰过的占比 + 按类型的 总数/已测。
   taskCoverage: (id: string) =>
     get<{
@@ -409,18 +433,6 @@ export const api = {
   deleteConstraint: (id: string, constraintId: string) =>
     del<{ ok: boolean }>(`/tasks/${id}/constraints/${constraintId}`),
 
-  // ---- 任务级资产拦截/允许规则（总览）----
-  taskInterceptRules: (id: string) =>
-    get<{ rules: AssetInterceptRule[] | null }>(`/tasks/${id}/intercept-rules`).then((r) => arr(r.rules)),
-  createTaskInterceptRule: (id: string, rule: AssetInterceptRuleInput) =>
-    post<AssetInterceptRule>(`/tasks/${id}/intercept-rules`, rule),
-  updateTaskInterceptRule: (id: string, ruleId: number, rule: AssetInterceptRuleInput) =>
-    put<AssetInterceptRule>(`/tasks/${id}/intercept-rules/${ruleId}`, rule),
-  deleteTaskInterceptRule: (id: string, ruleId: number) =>
-    del<{ deleted: boolean }>(`/tasks/${id}/intercept-rules/${ruleId}`),
-  toggleTaskInterceptRule: (id: string, ruleId: number, enabled: boolean) =>
-    post<{ ok: boolean; enabled: boolean }>(`/tasks/${id}/intercept-rules/${ruleId}/toggle`, { enabled }),
-
   // 本任务测试范围列表（含继承自来源任务的范围）。
   taskScope: (id: string) => get<{ scope: TaskScopeRow[] }>(`/tasks/${id}/scope`),
   // 手动新增一条测试范围（kind=company/root_domain/subdomain/ip/cidr）。
@@ -430,48 +442,6 @@ export const api = {
   deleteTaskScope: (id: string, scopeId: number) => del<{ ok: boolean }>(`/tasks/${id}/scope/${scopeId}`),
   // 某资产在本任务里关联的意图 / 事实 / 发现（覆盖图节点抽屉用）。
   taskAssetRefs: (id: string, assetId: number) => get<CoverageAssetRefs>(`/tasks/${id}/asset-refs?asset_id=${assetId}`),
-
-  // ---- workspace file manager (workDir) ----
-  workspaceList: (path = "") => get<WorkspaceListing>(`/workspace/list?path=${encodeURIComponent(path)}`),
-  workspaceRead: (path: string) => get<WorkspaceFile>(`/workspace/read?path=${encodeURIComponent(path)}`),
-  workspaceWrite: (path: string, content: string) =>
-    post<{ ok: boolean; path: string }>(`/workspace/write`, { path, content }),
-  workspaceMkdir: (path: string) => post<{ ok: boolean; path: string }>(`/workspace/mkdir`, { path }),
-  workspaceDelete: (path: string) => del<{ ok: boolean }>(`/workspace/delete?path=${encodeURIComponent(path)}`),
-  workspaceUpload: async (dir: string, files: File[]) => {
-    if (MOCK) return { uploaded: files.length };
-    const fd = new FormData();
-    for (const f of files) fd.append("file", f);
-    const token = getToken();
-    const r = await fetch(`/api/workspace/upload?path=${encodeURIComponent(dir)}`, {
-      method: "POST",
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: fd,
-    });
-    if (!r.ok) throw new Error(`上传失败: ${r.status}`);
-    return r.json() as Promise<{ uploaded: number }>;
-  },
-  workspaceDownload: async (path: string) => {
-    let blob: Blob;
-    if (MOCK) {
-      blob = new Blob([`（demo）${path} 的下载内容示例。`], { type: "text/plain" });
-    } else {
-      const token = getToken();
-      const r = await fetch(`/api/workspace/download?path=${encodeURIComponent(path)}`, {
-        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      });
-      if (!r.ok) throw new Error(`下载失败: ${r.status}`);
-      blob = await r.blob();
-    }
-    const objUrl = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = objUrl;
-    a.download = path.split("/").pop() || "download";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(objUrl);
-  },
 
   // ---- assets ----
   // Server-side paginated: pass limit/offset, get back the page + full match total.
@@ -487,16 +457,76 @@ export const api = {
     get<Record<string, number>>(`/assets/counts${taskId ? `?task_id=${encodeURIComponent(taskId)}` : ""}`),
   deleteAssets: (ids: number[]) =>
     http<{ deleted: number }>("/assets", { method: "DELETE", body: JSON.stringify({ ids }) }),
+
+  // ---- 联盟系统台账（fork-only: feat/alliance-system）----
+  // 列表（q/platform/tag 过滤）；统计；简报预览（与新建任务时写入的文本一致）。
+  allianceSystems: (q = "", platform = "", tag = "") =>
+    get<{ systems: AllianceSystem[] }>(
+      `/alliance/systems?q=${encodeURIComponent(q)}&platform=${encodeURIComponent(platform)}&tag=${encodeURIComponent(tag)}`,
+    ).then((r) => r?.systems ?? []),
+  allianceSystem: (id: number) =>
+    get<{ system: AllianceSystem; endpoints: AllianceEndpoint[] }>(`/alliance/systems/${id}`),
+  createAllianceSystem: (input: AllianceSystemInput) => post<{ id: number }>("/alliance/systems", input),
+  updateAllianceSystem: (id: number, input: AllianceSystemInput) =>
+    patch<{ ok: boolean }>(`/alliance/systems/${id}`, input),
+  deleteAllianceSystem: (id: number) => del<{ ok: boolean }>(`/alliance/systems/${id}`),
+  addAllianceEndpoint: (id: number, input: { url: string; note?: string }) =>
+    post<{ id: number }>(`/alliance/systems/${id}/endpoints`, input),
+  deleteAllianceEndpoint: (id: number, endpointId: number) =>
+    del<{ ok: boolean }>(`/alliance/systems/${id}/endpoints/${endpointId}`),
+  allianceStats: () => get<AllianceStats>("/alliance/stats"),
+  allianceBrief: (ids: number[]) => get<{ brief: string }>(`/alliance/brief?ids=${ids.join(",")}`),
+  // ---- 联盟画像（fork-only: feat/alliance-profile）----
+  allianceProfileTemplate: () => get<{ template: AllianceProfileDocument }>("/alliance/template"),
+  allianceProfile: (id: number) => get<{ profile: AllianceProfile }>(`/alliance/systems/${id}/profile`),
+  saveAllianceProfile: (
+    id: number,
+    input: { expected_version: number; environment: string; document: AllianceProfileDocument },
+  ) => put<{ profile: AllianceProfile }>(`/alliance/systems/${id}/profile`, input),
+  allianceProfileHistory: (id: number) =>
+    get<{ revisions: AllianceRevision[] }>(`/alliance/systems/${id}/profile/history`).then((r) => r?.revisions ?? []),
+  allianceSuggestions: (params: { systemId?: number; taskId?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.systemId) qs.set("system_id", String(params.systemId));
+    if (params.taskId) qs.set("task_id", String(params.taskId));
+    return get<{ suggestions: AllianceSuggestion[] }>(`/alliance/suggestions?${qs.toString()}`).then(
+      (r) => r?.suggestions ?? [],
+    );
+  },
+  reviewAllianceSuggestion: (
+    id: number,
+    input: { decision: "accepted" | "rejected"; expected_version: number; value?: string },
+  ) => post<{ suggestion: AllianceSuggestion }>(`/alliance/suggestions/${id}/review`, input),
+  allianceSuggestionEvidence: (id: number) =>
+    get<{ evidence: AllianceEvidenceItem[] }>(`/alliance/suggestions/${id}/evidence`).then((r) => r?.evidence ?? []),
+  taskAllianceProfile: (taskId: string | number) =>
+    get<{ snapshots: AllianceTaskSnapshot[]; reading: AllianceTaskReading | null }>(
+      `/tasks/${taskId}/alliance-profile`,
+    ),
+  readTaskAllianceProfile: (taskId: string | number) =>
+    post<{ reading: AllianceTaskReading | null }>(`/tasks/${taskId}/alliance-profile/read`, {}),
+  taskAllianceFeedback: (taskId: string | number) =>
+    get<{ runs: AllianceFeedbackRun[]; suggestions: AllianceSuggestion[] }>(`/tasks/${taskId}/alliance-feedback`),
+  retryTaskAllianceFeedback: (taskId: string | number, runId: number) =>
+    post<{ ok: boolean }>(`/tasks/${taskId}/alliance-feedback/${runId}/retry`, {}),
   // task-scoped view of the same endpoint — server-side paginated like `assets`
-  taskAssets: (taskId: string, type = "", limit = 50, offset = 0) =>
+  taskAssets: (taskId: string, type = "", limit = 50, offset = 0, tested = "all", approval = "all") =>
     get<{ count: number; total: number; assets: Asset[] }>(
-      `/assets?task_id=${encodeURIComponent(taskId)}&type=${encodeURIComponent(type)}&limit=${limit}&offset=${offset}`,
+      `/assets?task_id=${encodeURIComponent(taskId)}&type=${encodeURIComponent(type)}&tested=${encodeURIComponent(tested)}&approval_state=${encodeURIComponent(approval)}&limit=${limit}&offset=${offset}`,
     ).then((r) => ({ assets: r?.assets ?? [], total: r?.total ?? r?.count ?? 0 })),
   // DSL search scoped to a task — the backend forces the task_id filter, so it
   // always stays within that task's assets (same DSL grammar as `searchAssets`).
-  searchTaskAssets: (taskId: string, dsl: string, type = "", limit = 50, offset = 0) =>
+  searchTaskAssets: (
+    taskId: string,
+    dsl: string,
+    type = "",
+    limit = 50,
+    offset = 0,
+    tested = "all",
+    approval = "all",
+  ) =>
     get<{ count: number; total: number; assets: Asset[] }>(
-      `/assets?task_id=${encodeURIComponent(taskId)}&dsl=${encodeURIComponent(dsl)}&type=${encodeURIComponent(type)}&limit=${limit}&offset=${offset}`,
+      `/assets?task_id=${encodeURIComponent(taskId)}&dsl=${encodeURIComponent(dsl)}&type=${encodeURIComponent(type)}&tested=${encodeURIComponent(tested)}&approval_state=${encodeURIComponent(approval)}&limit=${limit}&offset=${offset}`,
     ).then((r) => ({ assets: r?.assets ?? [], total: r?.total ?? r?.count ?? 0 })),
   attachTaskAssets: (taskId: string, assetIds: number[], sourceSummary: string) =>
     post<TaskAssetMutation>(`/tasks/${taskId}/assets`, {
@@ -506,8 +536,32 @@ export const api = {
   registerTaskAssetScopes: (taskId: string, scope: CompanyScopeRule[]) =>
     post<TaskAssetScopeMutation>(`/tasks/${taskId}/assets`, { scope }),
   detachTaskAsset: (taskId: string, assetId: number) => del<{ detached: number }>(`/tasks/${taskId}/assets/${assetId}`),
-  taskIntentAssets: (taskId: string) =>
-    get<{ assets: IntentAsset[] }>(`/tasks/${taskId}/intent-assets`).then((r) => arr(r.assets)),
+  taskAssetApprovals: (taskId: string) =>
+    get<{ items: TaskAssetApproval[] }>(`/tasks/${taskId}/asset-approvals?group_by=host`).then((r) => r?.items ?? []),
+  updateTaskAssetTemplate: (taskId: string, value: import("./types").AssetApprovalTemplate) =>
+    put(`/tasks/${taskId}/asset-approval-template`, { asset_approval_template: value }),
+  mutateTaskAssetGroups: (
+    taskId: string,
+    operation: "approve" | "revoke" | "block",
+    groupKeys: string[],
+    reason = "",
+  ) =>
+    post<TaskAssetApprovalMutation>(`/tasks/${taskId}/asset-approvals/${operation}`, {
+      group_keys: groupKeys,
+      reason,
+    }),
+  approveTaskAssets: (taskId: string, assetIds: number[], reason = "") =>
+    post<TaskAssetApprovalMutation>(`/tasks/${taskId}/asset-approvals/approve`, { asset_ids: assetIds, reason }),
+  revokeTaskAssets: (taskId: string, assetIds: number[], reason = "") =>
+    post<TaskAssetApprovalMutation>(`/tasks/${taskId}/asset-approvals/revoke`, { asset_ids: assetIds, reason }),
+  blockTaskAssets: (taskId: string, assetIds: number[], reason = "") =>
+    post<TaskAssetApprovalMutation>(`/tasks/${taskId}/asset-approvals/block`, { asset_ids: assetIds, reason }),
+  taskIntentAssets: (taskId: string, before = 0, limit = 300, signal?: AbortSignal) => {
+    const query = new URLSearchParams({ before: String(Math.max(0, before)), limit: String(limit) });
+    return get<{ assets: IntentAsset[] }>(`/tasks/${taskId}/intent-assets?${query}`, { signal }).then((r) =>
+      arr(r.assets),
+    );
+  },
 
   // ---- companies (企业 + 资产范围；归属唯一来源) ----
   companies: () => get<Company[]>("/companies").then(arr),
@@ -539,8 +593,21 @@ export const api = {
   // ---- exploration (per task) ----
   frontier: (task?: string) => get<TaskNode[]>(`/exploration/frontier${tq(task)}`).then(arr),
   findings: (task?: string) => get<Finding[]>(`/exploration/findings${tq(task)}`).then(arr),
+  taskLegacyFinding: (task: string, node: string) =>
+    get<Finding>(`/exploration/findings?${new URLSearchParams({ context_task: task, legacy_node: node })}`),
+  taskFindingsPage: (
+    task: string,
+    page: number,
+    pageSize: number,
+    direction: "asc" | "desc",
+    filters: TaskFindingFilters = {},
+  ) =>
+    get<FindingsPage>(
+      `/exploration/findings?${new URLSearchParams({ context_task: task, page: String(page), limit: String(pageSize), direction, q: filters.query ?? "", status: filters.status ?? "all", severity: filters.severity ?? "all", scope: filters.scope ?? "all" })}`,
+    ),
   findingsPage: (q: FindingQuery) => {
     const p = findingFilterParams(q);
+    p.set("summary_only", "1");
     p.set("page", String(q.page));
     p.set("limit", String(q.pageSize));
     return get<FindingsPage>(`/exploration/findings?${p.toString()}`);
@@ -559,7 +626,7 @@ export const api = {
   // exportFindings 触发发现页导出并下载文件。scope=selected 时传 ids(finding_id 列表);
   // scope=filtered 时传当前筛选(沿用 FindingQuery 的筛选字段);scope=all 忽略筛选。
   exportFindings: async (opts: {
-    format: "md-single" | "md-zip" | "csv" | "json";
+    format: "md-report" | "md-report-zip" | "md-single" | "md-zip" | "csv" | "json";
     scope: "filtered" | "all" | "selected";
     filters?: Omit<FindingQuery, "page" | "pageSize">;
     ids?: string[];
@@ -570,16 +637,25 @@ export const api = {
     } else if (opts.scope === "filtered" && opts.filters) {
       for (const [k, v] of findingFilterParams(opts.filters)) p.set(k, v);
     }
-    const token = getToken();
-    const r = await fetch(`/api/exploration/findings/export?${p.toString()}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (!r.ok) throw new Error(`export: ${r.status}`);
-    const blob = await r.blob();
-    // 文件名优先取后端 Content-Disposition,取不到则用默认名。
-    const disp = r.headers.get("Content-Disposition") ?? "";
-    const m = disp.match(/filename="?([^"]+)"?/);
-    const filename = m?.[1] ?? `findings-export`;
+    let blob: Blob, filename: string;
+    if (MOCK) {
+      const payload = await get<{ filename: string; bytes: Uint8Array }>(
+        `/exploration/findings/export?${p.toString()}`,
+      );
+      blob = new Blob([new Uint8Array(payload.bytes)]);
+      filename = payload.filename;
+    } else {
+      const token = getToken();
+      const r = await entryAwareFetch(`/api/exploration/findings/export?${p.toString()}`, {
+        headers: token ? { "X-Series-Token": token } : {},
+      });
+      if (!r.ok) throw new Error(`export: ${r.status}`);
+      blob = await r.blob();
+      // 文件名优先取后端 Content-Disposition,取不到则用默认名。
+      const disp = r.headers.get("Content-Disposition") ?? "";
+      const m = disp.match(/filename="?([^"]+)"?/);
+      filename = m?.[1] ?? `findings-export`;
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -643,16 +719,24 @@ export const api = {
     side: "request" | "response",
     contextTask?: string,
   ) => {
-    const token = getToken();
-    const response = await fetch(
-      `/api/exploration/findings/${id}/traffic/${bindingId}/body?side=${side}&download=1${contextTask ? `&context_task=${encodeURIComponent(contextTask)}` : ""}`,
-      { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-    );
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "下载失败" }));
-      throw new Error(error.error ?? "下载失败");
+    let blob: Blob;
+    if (MOCK) {
+      const preview = await get<EvidenceBodyPreview>(
+        `/exploration/findings/${id}/traffic/${bindingId}/body?side=${side}&offset=0${contextTask ? `&context_task=${encodeURIComponent(contextTask)}` : ""}`,
+      );
+      blob = new Blob([preview.content], { type: "application/octet-stream" });
+    } else {
+      const token = getToken();
+      const response = await entryAwareFetch(
+        `/api/exploration/findings/${id}/traffic/${bindingId}/body?side=${side}&download=1${contextTask ? `&context_task=${encodeURIComponent(contextTask)}` : ""}`,
+        { headers: token ? { "X-Series-Token": token } : {} },
+      );
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: "下载失败" }));
+        throw new Error(error.error ?? "下载失败");
+      }
+      blob = await response.blob();
     }
-    const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -670,7 +754,17 @@ export const api = {
     fields: { name?: string; vulnclass?: string; severity?: Severity; status?: FindingStatus },
   ) => patch<Finding>(`/exploration/findings/${id}`, fields),
   // 删除漏洞:移除 findings 记录 + 来源探索节点(从发现列表/任务发现 Tab/探索图一并消失)。
-  deleteFinding: (id: string) => del<{ deleted: boolean; id: number }>(`/exploration/findings/${id}`),
+  deleteFinding: (id: string, reason?: string) =>
+    del<{ deleted: boolean; id: number }>(`/exploration/findings/${id}`, reason === undefined ? undefined : { reason }),
+  findingSuppressionRules: (taskId: string, before = 0) =>
+    get<{ items: FindingSuppressionRule[]; has_more: boolean; next_before: number }>(
+      `/tasks/${encodeURIComponent(taskId)}/finding-suppression-rules?before=${before}`,
+    ),
+  revokeFindingSuppression: (taskId: string, ruleId: string) =>
+    post<{ revoked: boolean }>(
+      `/tasks/${encodeURIComponent(taskId)}/finding-suppression-rules/${encodeURIComponent(ruleId)}/revoke`,
+      {},
+    ),
   findingRetests: (id: string) =>
     get<{ retests: FindingRetest[] }>(`/exploration/findings/${encodeURIComponent(id)}/retests`).then((r) =>
       arr(r.retests),
@@ -699,25 +793,30 @@ export const api = {
       .catch(() => [] as ConvTokenSummary[]),
   explorationGraph: (task?: string) => get<{ nodes: TaskNode[]; edges: Edge[] }>(`/exploration/graph${tq(task)}`),
   // 播报板:服务端按创建顺序分页的探索节点(默认最新在前)。
-  explorationNodes: (task: string, query: ExplorationNodeQuery = {}) => {
+  explorationNodes: (task: string, query: ExplorationNodeQuery = {}, signal?: AbortSignal) => {
     const q = new URLSearchParams();
     if (task) q.set("task", task);
     q.set("page", String(query.page ?? 1));
     q.set("size", String(query.size ?? 20));
+    if (query.countOnly) q.set("count_only", "1");
     if (query.kinds?.length) q.set("kind", query.kinds.join(","));
     if (query.states?.length) q.set("state", query.states.join(","));
     if (query.q?.trim()) q.set("q", query.q.trim());
     if (query.order === "asc") q.set("order", "asc");
-    return get<ExplorationNodePage>(`/exploration/nodes?${q.toString()}`).then((r) => ({
+    return get<ExplorationNodePage>(`/exploration/nodes?${q.toString()}`, { signal }).then((r) => ({
       items: arr(r.items),
       total: r.total ?? 0,
       page: r.page ?? 1,
       size: r.size ?? query.size ?? 20,
       edges: arr(r.edges),
       refs: r.refs ?? {},
-      assets: r.assets ?? {},
     }));
   },
+  explorationNodeDetail: (task: string, id: string, bodyOffset = 0, edgeOffset = 0, signal?: AbortSignal) =>
+    get<import("@/lib/types").ExplorationNodeDetail>(
+      `/exploration/nodes/${encodeURIComponent(id)}?${new URLSearchParams({ task, body_offset: String(bodyOffset), edge_offset: String(edgeOffset) })}`,
+      { signal },
+    ),
   activity: (task?: string, opts?: { intent?: string; since?: number; limit?: number }) => {
     const q = new URLSearchParams();
     if (task) q.set("task", task);
@@ -735,16 +834,35 @@ export const api = {
   // snapshotCursor is the TASK-level max id at query time — open the task SSE at
   // since=snapshotCursor so history (id≤cursor) and the live tail (id>cursor) meet
   // gap-free. hasMore = still-older steps exist (drives scroll-up loading).
-  activityHistory: (task: string, session: string, before = 0, limit = 200) => {
+  activitySearch: (task: string, session: string, q: string, cursor = "") =>
+    get<{ items: { id: number; kind: string; snippet: string }[]; next_cursor: string; source_task_id?: number }>(
+      `/exploration/activity/search?${new URLSearchParams({ task, session, q, ...(cursor ? { cursor } : {}) })}`,
+    ),
+  activityHistory: (
+    task: string,
+    session: string,
+    before = 0,
+    limit = 200,
+    position?: { around?: number; after?: number },
+  ) => {
     const q = new URLSearchParams({ session, limit: String(limit) });
     if (task) q.set("task", task);
     if (before > 0) q.set("before", String(before));
-    return get<{ items: Activity[]; snapshot_cursor: number; earliest_cursor: number; has_more: boolean }>(
-      `/exploration/activity/history?${q.toString()}`,
-    ).then((r) => ({
+    if (position?.around) q.set("around", String(position.around));
+    if (position?.after) q.set("after", String(position.after));
+    return get<{
+      items: Activity[];
+      snapshot_cursor: number;
+      earliest_cursor: number;
+      latest_cursor: number;
+      has_newer: boolean;
+      has_more: boolean;
+    }>(`/exploration/activity/history?${q.toString()}`).then((r) => ({
       items: arr(r.items),
       snapshotCursor: r.snapshot_cursor ?? 0,
       earliestCursor: r.earliest_cursor ?? 0,
+      latestCursor: r.latest_cursor ?? 0,
+      hasNewer: !!r.has_newer,
       hasMore: !!r.has_more,
     }));
   },
@@ -810,9 +928,26 @@ export const api = {
   // index handed back to the filesystem. Evidence bound to findings is kept.
   trafficDeleteAll: () => del<{ deleted: number; reclaimed: number }>(`/traffic/all`),
 
+  httpAuthSettings: () => get<HTTPAuthSettings>("/settings/http-auth"),
+  saveHTTPAuthSettings: (value: { enabled: boolean; username: string; password: string }) =>
+    put<HTTPAuthSettings>("/settings/http-auth", value),
+
   // ---- app settings (runtime toggles) ----
   settings: () => get<Settings>(`/settings`),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
+  // 任务级：列出该任务标记的主机。
+  taskSmartProxyHosts: (taskId: string) =>
+    get<{ hosts: SmartProxyHost[] }>(`/tasks/${taskId}/smart-proxy/hosts`).then((r) => arr(r.hosts)),
+  // 任务级：移除该任务下的一条标记。
+  deleteTaskSmartProxyHost: (taskId: string, host: string) =>
+    http<{ ok: boolean }>(`/tasks/${taskId}/smart-proxy/hosts?host=${encodeURIComponent(host)}`, {
+      method: "DELETE",
+    }),
+  // 删除一条智能代理标记（按任务 + 主机定位）。
+  deleteSmartProxyHost: (taskId: number, host: string) =>
+    http<{ ok: boolean }>(`/settings/smart-proxy/hosts?task_id=${taskId}&host=${encodeURIComponent(host)}`, {
+      method: "DELETE",
+    }),
   // Run a real "test" search with the given (or saved) config to verify it works.
   testWebSearch: (patch: {
     web_search_backend?: string;
@@ -820,58 +955,7 @@ export const api = {
     brave_search_api_key?: string;
     tavily_search_api_key?: string;
   }) => post<{ ok: boolean; error?: string; count?: number; backend?: string }>(`/settings/web-search/test`, patch),
-
-  // ---- 漏洞 IM 推送 ----
-  // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，
-  // 不塞进扁平的 settings 键值里。
-  notifyMeta: () => get<NotificationMeta>(`/notify/meta`),
-  notifyChannels: () =>
-    get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
-  notifyCreateChannel: (payload: {
-    name: string;
-    kind: string;
-    enabled?: boolean;
-    mode?: string;
-    config: Record<string, unknown>;
-    filter?: NotificationFilter;
-    rate_per_min?: number;
-  }) => post<{ id: number }>(`/notify/channels`, payload),
-  // PATCH 语义：只提交要改的字段。config 里的掩码值原样回传即表示「保持原值」。
-  notifyUpdateChannel: (
-    id: number,
-    payload: {
-      name?: string;
-      kind?: string;
-      enabled?: boolean;
-      mode?: string;
-      config?: Record<string, unknown>;
-      filter?: NotificationFilter;
-      rate_per_min?: number;
-    },
-  ) => patch<{ id: number }>(`/notify/channels/${id}`, payload),
-  notifyDeleteChannel: (id: number) => del<{ ok: boolean }>(`/notify/channels/${id}`),
-  // 同步发一条测试消息；失败时后端会把渠道的原始错误回传，供排查配置。
-  notifyTestChannel: (id: number) => post<{ ok: boolean; latency_ms: number }>(`/notify/channels/${id}/test`),
-  notifyDeliveries: (q: { channelId?: number; state?: string; page?: number; pageSize?: number } = {}) => {
-    const p = new URLSearchParams();
-    if (q.channelId) p.set("channel_id", String(q.channelId));
-    if (q.state) p.set("state", q.state);
-    p.set("page", String(q.page ?? 1));
-    p.set("page_size", String(q.pageSize ?? 50));
-    return get<{ deliveries: NotificationDelivery[]; total: number; page: number; page_size: number }>(
-      `/notify/deliveries?${p.toString()}`,
-    ).then((r) => ({ ...r, deliveries: arr(r.deliveries) }));
-  },
-  notifyRetryDelivery: (id: number) => post<{ ok: boolean }>(`/notify/deliveries/${id}/retry`),
-  report: async (task?: string) => {
-    if (MOCK) return mockReport(task);
-    const token = getToken();
-    const r = await fetch(`/api/report${tq(task)}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (!r.ok) throw new Error(`report: ${r.status}`);
-    return r.text();
-  },
+  testGlobalProxy: (proxy: string) => post<GlobalProxyProbeResult>(`/settings/global-proxy/test`, { proxy }),
   chatMentions: (kind: string, query: string, signal?: AbortSignal, cursor = "") =>
     http<{ items: ChatMention[]; next_cursor?: string }>(
       `/chat/mentions?${new URLSearchParams({ kind, q: query, cursor })}`,
@@ -894,9 +978,9 @@ export const api = {
     const fd = new FormData();
     for (const f of files) fd.append("file", f);
     const token = getToken();
-    const r = await fetch(`/api/chat/upload?scope=${scope}&id=${encodeURIComponent(id)}`, {
+    const r = await entryAwareFetch(`/api/chat/upload?scope=${scope}&id=${encodeURIComponent(id)}`, {
       method: "POST",
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: { ...(token ? { "X-Series-Token": token } : {}) },
       body: fd,
     });
     if (!r.ok) throw new Error(`上传失败: ${r.status} ${await r.text()}`);
@@ -1090,15 +1174,58 @@ export const api = {
   resetTool: (key: string) => post<{ ok: boolean }>(`/tools/${key}/reset`, {}),
   // custom tools (自定义工具)
   createCustomTool: (
-    t: Pick<Tool, "key" | "description" | "schema" | "agents" | "enabled" | "kind" | "exec" | "deferred">,
+    t: Pick<
+      Tool,
+      | "key"
+      | "description"
+      | "schema"
+      | "agents"
+      | "enabled"
+      | "kind"
+      | "exec"
+      | "deferred"
+      | "executable"
+      | "directory"
+      | "usage_help"
+      | "when_to_use"
+    >,
   ) => post<{ key: string }>("/tools/custom", t),
   updateCustomTool: (
     key: string,
-    t: Pick<Tool, "description" | "schema" | "agents" | "enabled" | "kind" | "exec" | "deferred">,
+    t: Pick<
+      Tool,
+      | "description"
+      | "schema"
+      | "agents"
+      | "enabled"
+      | "kind"
+      | "exec"
+      | "deferred"
+      | "executable"
+      | "directory"
+      | "usage_help"
+      | "when_to_use"
+    >,
   ) => put<{ ok: boolean }>(`/tools/custom/${key}`, t),
   deleteCustomTool: (key: string) => del<{ deleted: string }>(`/tools/custom/${key}`),
-  testCustomTool: (body: { kind: string; exec: Record<string, unknown>; params: Record<string, unknown> }) =>
-    post<{ output: string; is_error: boolean }>("/tools/custom/test", body),
+  testCustomTool: (
+    body: {
+      kind: string;
+      exec: Record<string, unknown>;
+      params: Record<string, unknown>;
+      key?: string;
+      executable?: string;
+      directory?: string;
+      action?: "check" | "run";
+      command?: string;
+    },
+    signal?: AbortSignal,
+  ) =>
+    http<{ output: string; is_error: boolean; duration_ms?: number }>("/tools/custom/test", {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal,
+    }),
   detectPython: () => post<{ python_interpreter: string }>("/settings/python/detect", {}),
 
   // ---- mcp ----
@@ -1106,36 +1233,21 @@ export const api = {
   saveMcpServer: (m: Partial<MCPServer>) => post<{ id: number }>("/mcp", m),
   deleteMcpServer: (id: number) => del<{ deleted: number }>(`/mcp/${id}`),
   mcpTools: (id: number) => get<{ tools: MCPTool[] }>(`/mcp/${id}/tools`).then((r) => arr(r.tools)),
+  mcpUsage: (id: number, limit = 50) =>
+    get<{ stats: MCPUsageStat[]; calls: MCPCall[] }>(`/mcp/${id}/usage?limit=${limit}`),
   refreshMcpServer: (id: number) => post<{ tools: MCPTool[] }>(`/mcp/${id}/refresh`, {}).then((r) => arr(r.tools)),
-
-  // ---- 资产同步 (ScopeSentry 数据源) ----
-  ssStatus: () =>
-    get<{ exists: boolean; configured: boolean; enabled: boolean; reachable: boolean; url?: string; tools: string[] }>(
-      "/sync/scopesentry/status",
-    ),
-  ssDatasource: (body: { url?: string; api_key?: string }) =>
-    post<{ id: number; enabled: boolean }>("/sync/scopesentry/datasource", body),
-  ssProjects: (page = 1, size = 50, search = "") =>
-    get<{ projects: SSProject[]; tag: Record<string, number> }>(
-      `/sync/scopesentry/projects?page=${page}&size=${size}${search ? `&search=${encodeURIComponent(search)}` : ""}`,
-    ).then((r) => ({ projects: arr(r.projects), tag: r.tag ?? {} })),
-  ssTasks: (page = 1, size = 50, search = "") =>
-    get<{ tasks: SSTask[] }>(
-      `/sync/scopesentry/tasks?page=${page}&size=${size}${search ? `&search=${encodeURIComponent(search)}` : ""}`,
-    ).then((r) => arr(r.tasks)),
-  ssSync: (body: {
-    dimension: "project" | "task";
-    targets: string[];
-    asset_types: string[];
-    create_company?: boolean;
-    page_size?: number;
-  }) =>
-    post<{
-      synced: Record<string, number>;
-      companies: string[] | null;
-      warnings: string[] | null;
-      errors: string[] | null;
-    }>("/sync/scopesentry/sync", body),
+  testMcpServer: (m: Partial<MCPServer>) => post<MCPTestResult>("/mcp/test", m),
+  importMcpServers: (
+    servers: Array<{
+      name: string;
+      transport: "stdio" | "http" | "sse";
+      command?: string;
+      args: string[];
+      env: Record<string, string>;
+      url?: string;
+      enabled: boolean;
+    }>,
+  ) => post<{ ok: boolean; results: MCPImportResult[] }>("/mcp/import", { servers }),
 
   // ---- skills (文件系统) ----
   skills: () => get<{ skills: SkillItem[] }>("/skills").then((r) => arr(r.skills)),
@@ -1154,10 +1266,10 @@ export const api = {
     const fd = new FormData();
     fd.append("file", file);
     const token = getToken();
-    const r = await fetch(`/api/skills/upload${overwrite ? "?overwrite=true" : ""}`, {
+    const r = await entryAwareFetch(`/api/skills/upload${overwrite ? "?overwrite=true" : ""}`, {
       method: "POST",
       body: fd,
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: token ? { "X-Series-Token": token } : {},
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(body?.error || `上传失败(${r.status})`);
@@ -1201,18 +1313,9 @@ export const api = {
   toggleInterceptRule: (id: number, enabled: boolean) =>
     post<{ ok: boolean; enabled: boolean }>(`/intercept/rules/${id}/toggle`, { enabled }),
 
-  // ---- asset intercept rules（资产拦截：全局黑名单） ----
-  assetInterceptRules: () => get<{ rules: AssetInterceptRule[] }>("/asset-intercept/rules").then((r) => arr(r.rules)),
-  createAssetInterceptRule: (rule: Pick<AssetInterceptRule, "enabled" | "kind" | "pattern" | "note">) =>
-    post<AssetInterceptRule>("/asset-intercept/rules", rule),
-  updateAssetInterceptRule: (id: number, rule: Pick<AssetInterceptRule, "enabled" | "kind" | "pattern" | "note">) =>
-    put<AssetInterceptRule>(`/asset-intercept/rules/${id}`, rule),
-  deleteAssetInterceptRule: (id: number) => del<{ deleted: number }>(`/asset-intercept/rules/${id}`),
-  toggleAssetInterceptRule: (id: number, enabled: boolean) =>
-    post<{ ok: boolean; enabled: boolean }>(`/asset-intercept/rules/${id}/toggle`, { enabled }),
-
   // ---- intercept pending (ask) ----
-  interceptPending: () => get<{ pending: InterceptPending[] }>("/intercept/pending").then((r) => arr(r.pending)),
+  interceptPending: (signal?: AbortSignal, task?: string) =>
+    get<{ pending: InterceptPending[] }>(`/intercept/pending${tq(task)}`, { signal }).then((r) => arr(r.pending)),
   interceptGetOne: (id: number) => get<InterceptPending>(`/intercept/pending/${id}`),
   interceptDecide: (id: number, decision: "allowed" | "denied") =>
     post<{ ok: boolean }>(`/intercept/pending/${id}/decide`, { decision }),
@@ -1222,18 +1325,26 @@ export const api = {
     ),
   interceptDetail: (id: number) => get<InterceptDetail>(`/intercept/history/${id}`),
   interceptHistory: () => get<{ items: InterceptApprovalRow[] }>("/intercept/history").then((r) => arr(r.items)),
-  interceptHistoryPage: (page = 1, size = 20, filter: InterceptApprovalFilter = {}) =>
+  interceptHistoryPage: (page = 1, size = 20, filter: InterceptApprovalFilter = {}, signal?: AbortSignal) =>
     get<{ items: InterceptApprovalRow[]; total?: number }>(
       `/intercept/history?${interceptPageQuery(page, size, filter)}`,
+      { signal },
     ).then((r) => ({
       items: arr(r.items),
       total: r.total ?? r.items?.length ?? 0,
     })),
   interceptTask: (taskId: string) =>
     get<{ items: InterceptApprovalRow[] }>(`/intercept/task/${taskId}`).then((r) => arr(r.items)),
-  interceptTaskPage: (taskId: string, page = 1, size = 20, filter: InterceptApprovalFilter = {}) =>
+  interceptTaskPage: (
+    taskId: string,
+    page = 1,
+    size = 20,
+    filter: InterceptApprovalFilter = {},
+    signal?: AbortSignal,
+  ) =>
     get<{ items: InterceptApprovalRow[]; total?: number }>(
       `/intercept/task/${encodeURIComponent(taskId)}?${interceptPageQuery(page, size, filter)}`,
+      { signal },
     ).then((r) => ({
       items: arr(r.items),
       total: r.total ?? r.items?.length ?? 0,
@@ -1243,8 +1354,8 @@ export const api = {
   interceptGetToolConfig: async (): Promise<{ enabled_tools: string[] }> => {
     if (MOCK) return { enabled_tools: ["bash"] };
     const token = getToken();
-    const r = await fetch("/api/intercept/tool-config", {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    const r = await entryAwareFetch("/api/intercept/tool-config", {
+      headers: token ? { "X-Series-Token": token } : {},
     });
     if (!r.ok) throw new Error(await r.text());
     return r.json();
@@ -1252,11 +1363,11 @@ export const api = {
   interceptSetToolConfig: async (enabledTools: string[]): Promise<void> => {
     if (MOCK) return;
     const token = getToken();
-    const r = await fetch("/api/intercept/tool-config", {
+    const r = await entryAwareFetch("/api/intercept/tool-config", {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(token ? { "X-Series-Token": token } : {}),
       },
       body: JSON.stringify({ enabled_tools: enabledTools }),
     });
@@ -1266,7 +1377,6 @@ export const api = {
   // ---- intercept LLM judge (模型兜底审批,全局配置) ----
   interceptGetJudgeConfig: () => get<JudgeConfig>("/intercept/judge"),
   interceptSetJudgeConfig: (cfg: JudgeConfig) => put<{ ok: boolean }>("/intercept/judge", cfg),
-  interceptJudgeUsage: (days = 30) => get<JudgeUsage>(`/intercept/judge/usage?days=${days}`),
 
   // ---- commands (tool execution history, any tool) ----
   commands: (params?: { task?: string; q?: string; page?: number; size?: number }) => {
@@ -1302,15 +1412,4 @@ export const api = {
   // per-agent 绑定 / 轮询 / 中断消耗都覆盖）。
   tokensByModel: (task: string) =>
     get<{ models: ModelTokenStat[] }>(`/llm/records/by-model?task=${encodeURIComponent(task)}`),
-
-  // ---- 一键更新 ----
-  // 检查以后端为准：下载是后端做的，浏览器能连 GitHub 而服务器连不上的情况很常见
-  // （服务器在内网、代理只配在浏览器上），那时点更新必然失败。
-  // 后端对 GitHub 的查询结果有 30 分钟缓存（未认证的 GitHub API 是 60 次/小时/IP，
-  // 顶栏每次整页加载都会查一次，不缓存会很快耗光配额）。force=true 强制回源，
-  // 留给用户显式点「检查更新」时用。
-  checkUpdate: (force = false) => get<UpdateCheck>(`/update/check${force ? "?force=1" : ""}`),
-  // 202 即返回，实际下载在后台跑，进度走 /api/update/stream。
-  applyUpdate: () => post<{ ok: boolean; target: string }>(`/update/apply`),
-  rollbackUpdate: () => post<{ ok: boolean }>(`/update/rollback`),
 };

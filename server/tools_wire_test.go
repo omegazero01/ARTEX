@@ -3,11 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
 )
 
 func names(tools []actool.CoreTool) map[string]actool.CoreTool {
@@ -36,8 +37,8 @@ func TestWireTools(t *testing.T) {
 	t.Cleanup(func() { agent.ToolResolve = nil })
 	// Prevent interactive-shell Bash decoration: if the worker agent has
 	// interactive_shell=true in the DB, ToolResolve would append a note to
-	// Bash's description. Disable that for this test so the undecorated
-	// pass-through assertion holds regardless of DB state.
+	// Bash's description. Disable that for this test; shell-kind custom tools
+	// are intentionally still allowed to append their environment hints.
 	t.Setenv("AGENT_CORE_DISABLE_INTERACTIVE_SHELL", "1")
 
 	// Seeding populated the catalog.
@@ -52,7 +53,7 @@ func TestWireTools(t *testing.T) {
 	base := append(ts.WorkerTools(), actool.DefaultTools()...)
 	ctx := context.Background()
 
-	worker := names(agent.ToolResolve(ctx, "worker", base))
+	worker := names(resolveToolsForTest(t, ctx, "worker", base))
 	if _, ok := worker["record_fact"]; !ok {
 		t.Error("worker lost record_fact")
 	}
@@ -61,11 +62,14 @@ func TestWireTools(t *testing.T) {
 	// non-catalog rows, so future user-defined custom tools survive too.
 	if bash, ok := worker["Bash"]; !ok {
 		t.Error("worker lost Bash (should pass through)")
-	} else if bash.Description() != actool.NewBash().Description() {
-		t.Error("Bash should pass through undecorated, but description changed")
+	} else {
+		want := actool.NewBash().Description() + shellToolNote(mustToolRows(t, pg), "worker")
+		if bash.Description() != want {
+			t.Errorf("Bash description = %q, want catalog shell hints appended", bash.Description())
+		}
 	}
 	// planner is not bound to record_fact → resolving a base that contains it drops it.
-	planner := names(agent.ToolResolve(ctx, "planner", base))
+	planner := names(resolveToolsForTest(t, ctx, "planner", base))
 	if _, ok := planner["record_fact"]; ok {
 		t.Error("planner should not get record_fact (not bound)")
 	}
@@ -85,13 +89,16 @@ func TestWireTools(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	worker2 := names(agent.ToolResolve(ctx, "worker", base))
+	worker2 := names(resolveToolsForTest(t, ctx, "worker", base))
 	got := worker2["record_fact"]
 	if got == nil {
 		t.Fatal("record_fact missing after edit")
 	}
-	if got.Description() != "EDITED DESC" {
-		t.Errorf("description = %q, want EDITED DESC", got.Description())
+	if !strings.HasPrefix(got.Description(), baseDescription(base, "record_fact")) || !strings.Contains(got.Description(), "default 为准") {
+		t.Errorf("runtime contract replaced by outdated saved text: %q", got.Description())
+	}
+	if saved, err := pg.GetTool(rf.Key); err != nil || saved.Description != "EDITED DESC" {
+		t.Fatal("saved user description was overwritten")
 	}
 	// Default injection: omit confidence → handler input should carry the default.
 	// We can't run the real handler (nil store), but InputSchema must show the default.
@@ -101,6 +108,24 @@ func TestWireTools(t *testing.T) {
 	if conf["default"] != "inferred" {
 		t.Errorf("confidence.default = %v, want inferred", conf["default"])
 	}
+}
+
+func baseDescription(tools []actool.CoreTool, name string) string {
+	for _, tool := range tools {
+		if tool.Name() == name {
+			return tool.Description()
+		}
+	}
+	return ""
+}
+
+func mustToolRows(t *testing.T, pg *db.DB) []*db.Tool {
+	t.Helper()
+	rows, err := pg.ListTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
 }
 
 func mustJSON(v any) json.RawMessage {

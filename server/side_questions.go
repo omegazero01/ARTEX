@@ -15,12 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/llmrec"
-	"github.com/Autumn-27/artex/sidequestion"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/transcript"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/llmrec"
+	"github.com/neouks/series/sidequestion"
 )
 
 type sideRun struct {
@@ -52,7 +52,7 @@ func bindSideProvider(p llm.Provider, cfg agent.Config, id int64, name string) l
 
 func (s *Server) initSideQuestions() {
 	s.side = &sideQuestionState{pending: map[string]sidequestion.Snapshot{}, latest: map[string]sidequestion.Snapshot{}, seen: map[string][2]int64{}, runs: map[string]sideRun{}, done: make(chan struct{})}
-	if n, err := strconv.Atoi(os.Getenv("ARTEX_BTW_MAX_OUTPUT_TOKENS")); err == nil && n >= 256 && n <= 32768 {
+	if n, err := strconv.Atoi(os.Getenv("SERIES_BTW_MAX_OUTPUT_TOKENS")); err == nil && n >= 256 && n <= 32768 {
 		s.side.outputTokens = n
 	}
 	if s.m.pg == nil {
@@ -262,7 +262,7 @@ func (s *Server) sideParent(w http.ResponseWriter, r *http.Request, kind string)
 			return p, false
 		}
 		if n.State == "stopped" {
-			writeErr(w, 409, "Worker 已删除")
+			writeErr(w, 409, "Worker 已取消执行")
 			return p, false
 		}
 		p.IntentID = iid
@@ -354,6 +354,13 @@ func (s *Server) handleSideQuestions(w http.ResponseWriter, r *http.Request, p s
 	}
 	s.side.commands.Lock()
 	defer s.side.commands.Unlock()
+	if p.IntentID > 0 {
+		node, err := s.m.pg.Exploration(p.ExplorationID).GetNode(p.IntentID)
+		if err != nil || node == nil || node.State == "stopped" {
+			writeErr(w, 409, "Worker 已取消或删除")
+			return
+		}
+	}
 	if p.TaskID > 0 && s.engine.IsDeleting(strconv.FormatInt(p.TaskID, 10)) {
 		writeErr(w, 409, "任务正在归档或删除")
 		return
@@ -463,6 +470,16 @@ func (s *Server) runSide(ctx context.Context, cancel context.CancelFunc, e sideq
 		return ok, nil
 	}
 	memory, runErr := s.m.pg.SideMemory(ctx, e)
+	if runErr == nil && parent.TaskID > 0 {
+		role := "mainagent"
+		if parent.IntentID > 0 {
+			role = "worker"
+		}
+		ctx = agent.WithRunInfo(ctx, agent.RunInfo{TaskID: parent.TaskID, ExplorationID: parent.ExplorationID, IntentID: parent.IntentID, AgentKey: role})
+		// Recheck before summarization as well as at the final provider boundary.
+		snapshot.Request, runErr = agent.FilterTaskAssetRequest(ctx, s.m.Assets(), parent.TaskID, snapshot.Request)
+		provider = agent.WithTaskAssetContext(provider, s.m.Assets(), parent.TaskID)
+	}
 	var answer sidequestion.Answer
 	if runErr == nil {
 		answer, e.Context, runErr = (sidequestion.SideQuestionService{Provider: provider}).Respond(ctx, snapshot, agentQuestion, sidequestion.Replay{

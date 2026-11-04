@@ -13,9 +13,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/llm"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
 )
 
 func TestChatMentionParsing(t *testing.T) {
@@ -122,6 +122,11 @@ func TestChatMentionWorkerReceivesServerDetails(t *testing.T) {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
 	defer m.Close()
+	// Use this fixture's catalog, not a process-global resolver left by a
+	// previous server whose database has already been closed.
+	oldResolve, oldBinding := agent.ToolResolve, agent.FindingTrafficBindingEnabled
+	wireTools(m.pg, nil)
+	t.Cleanup(func() { agent.ToolResolve, agent.FindingTrafficBindingEnabled = oldResolve, oldBinding })
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{ctx: ctx, m: m, engine: NewEngine(m)}
 	task, err := m.CreateTask("Worker mention test", "Read referenced records", nil, 0, 0)
@@ -150,9 +155,7 @@ func TestChatMentionWorkerReceivesServerDetails(t *testing.T) {
 		return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{llm.TextBlock("已读取引用")}}, "end_turn", llm.Usage{}, nil
 	}}, "test", m.dir, nil, 10000, 1)
 	worker.SetNonStreaming(func() bool { return true })
-	s.engine.SetAuthoritativeAgentResolver(func(*Task) (*agent.Planner, *agent.Worker) {
-		return nil, worker
-	})
+	s.engine.UseLLM(nil, worker)
 	send := func(message string) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(map[string]string{"message": message, "request_id": "worker-mention-test"})
 		r := httptest.NewRequest("POST", "/", strings.NewReader(string(body)))

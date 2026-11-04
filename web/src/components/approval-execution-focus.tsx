@@ -1,12 +1,23 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import type { Activity, InterceptExecution } from "@/lib/types";
 
 // Resolve one exact persisted call, independently of transcript pagination.
-export function useApprovalFocus({ taskId, conversationId }: { taskId?: string; conversationId?: number }) {
+export function useApprovalFocus({
+  taskId,
+  conversationId,
+  enabled = true,
+}: {
+  taskId?: string;
+  conversationId?: number;
+  enabled?: boolean;
+}) {
+  const params = useSearchParams();
+  const query = params.toString();
   const [state, setState] = React.useState<{
     id: number;
     source?: InterceptExecution;
@@ -16,10 +27,10 @@ export function useApprovalFocus({ taskId, conversationId }: { taskId?: string; 
   const [revision, setRevision] = React.useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision is the explicit retry trigger.
   React.useEffect(() => {
-    const q = new URLSearchParams(window.location.search);
+    const q = new URLSearchParams(query);
     const id = Number(q.get("approval"));
     const matches = conversationId ? q.get("c") === String(conversationId) : q.get("id") === taskId;
-    if (!matches || !Number.isSafeInteger(id) || id <= 0) {
+    if (!enabled || !matches || !Number.isSafeInteger(id) || id <= 0) {
       setState(null);
       return;
     }
@@ -44,11 +55,11 @@ export function useApprovalFocus({ taskId, conversationId }: { taskId?: string; 
     return () => {
       cancelled = true;
     };
-  }, [taskId, conversationId, revision]);
+  }, [taskId, conversationId, enabled, query, revision]);
   const close = React.useCallback(() => {
     const url = new URL(window.location.href);
     url.searchParams.delete("approval");
-    window.history.replaceState(null, "", url);
+    window.history.replaceState(window.history.state, "", url);
     setState(null);
   }, []);
   return { state, close, retry: () => setRevision((v) => v + 1) };

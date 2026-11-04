@@ -13,10 +13,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/intercept"
-	"github.com/Autumn-27/artex/sidequestion"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/intercept"
+	"github.com/neouks/series/sidequestion"
 )
 
 const (
@@ -546,6 +546,26 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 		return
 	}
 	pg := s.m.pg
+	if c.AgentKey == db.FindingRetestAgentKey {
+		retest, err := pg.FindingRetestForConversation(ctx, c.ID)
+		if err != nil || retest == nil {
+			finishReason = "复测任务上下文不可用"
+			return
+		}
+		finding, err := pg.GetFinding(retest.FindingID)
+		if err != nil || finding == nil {
+			finishReason = "复测漏洞不可用"
+			return
+		}
+		if finding.TaskID != nil && *finding.TaskID > 0 {
+			task, ok := s.m.Task(strconv.FormatInt(*finding.TaskID, 10))
+			if !ok {
+				finishReason = "原任务不可用，无法核验复测授权"
+				return
+			}
+			ca = ca.WithTaskPolicy(s.m.Assets(), *finding.TaskID, s.m.TaskProxyAddr(), s.m.TaskProxyCACert(), task.Guard)
+		}
+	}
 	maxTurns := s.agentMaxTurns(c.AgentKey)
 	maxDuration := time.Duration(s.agentRunSeconds(c.AgentKey)) * time.Second
 	webSearch := false

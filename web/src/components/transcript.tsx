@@ -1,6 +1,13 @@
 "use client";
 
-import * as React from "react";
+import { ApprovalDetail } from "@/components/approval-records";
+import { Markdown } from "@/components/markdown";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { api } from "@/lib/api";
+import type { Activity, InterceptPending } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import {
   CheckIcon,
   ChevronDown,
@@ -15,23 +22,11 @@ import {
   Wrench,
   XIcon,
 } from "lucide-react";
+import * as React from "react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
-import { Markdown } from "@/components/markdown";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ApprovalDetail } from "@/components/approval-records";
-import type { Activity, InterceptPending } from "@/lib/types";
 
 // ---- per-agent lane color (planner + work#1/#2/#3 …) ---------------------------
-const workerColors = [
-  "bg-sky-600",
-  "bg-violet-600",
-  "bg-teal-600",
-  "bg-pink-600",
-  "bg-orange-600",
-];
+const workerColors = ["bg-sky-600", "bg-violet-600", "bg-teal-600", "bg-pink-600", "bg-orange-600"];
 function workerColor(name: string): string {
   if (name === "planner") return "bg-amber-600"; // the intent generator, distinct
   if (name === "mainagent") return "bg-primary";
@@ -88,6 +83,7 @@ function groupSteps(steps: Activity[], chat: boolean): Group[] {
   const out: Group[] = [];
   const byToolId = new Map<string, Extract<Group, { type: "tool" }>>();
   for (const s of steps) {
+    const callKey = `${s.worker}:${s.intent_id ?? ""}:${s.main_seg ?? 0}:${s.tool_use_id}`;
     if (s.kind === "usage") continue; // live token-usage marker — not a rendered step
     if (s.kind === "round") {
       out.push({ type: "round", key: s.seq, label: s.summary || "新一轮" }); // planner round boundary
@@ -111,13 +107,13 @@ function groupSteps(steps: Activity[], chat: boolean): Group[] {
     }
     if (s.kind === "tool_use") {
       const g: Extract<Group, { type: "tool" }> = { type: "tool", key: s.seq, worker: s.worker, use: s };
-      if (s.tool_use_id) byToolId.set(s.tool_use_id, g);
+      if (s.tool_use_id) byToolId.set(callKey, g);
       out.push(g);
       continue;
     }
     if (s.kind === "tool_result") {
       // bind to its tool_use by id (NOT adjacency — tools can run in parallel)
-      const g = s.tool_use_id ? byToolId.get(s.tool_use_id) : undefined;
+      const g = s.tool_use_id ? byToolId.get(callKey) : undefined;
       if (g && !g.result) g.result = s;
       else out.push({ type: "tool", key: s.seq, worker: s.worker, result: s }); // orphan result
       continue;
@@ -173,9 +169,7 @@ function toolInputText(tool: string, raw: string): string {
       return JSON.parse('"' + m[1] + '"');
     } catch {
       // truncated mid-escape — unescape the common sequences best-effort.
-      return m[1].replace(/\\(["\\/nrt])/g, (_s, c) =>
-        c === "n" ? "\n" : c === "r" ? "\r" : c === "t" ? "\t" : c,
-      );
+      return m[1].replace(/\\(["\\/nrt])/g, (_s, c) => (c === "n" ? "\n" : c === "r" ? "\r" : c === "t" ? "\t" : c));
     }
   }
   return raw;
@@ -184,13 +178,7 @@ function toolInputText(tool: string, raw: string): string {
 // InterceptCard renders an inline intercept_request approval card. The pending_id
 // is extracted from the summary (format: "工具 X 请求审批 (#N)") so buttons are
 // available immediately without waiting for the detail load.
-function InterceptCard({
-  step,
-  getDetail,
-}: {
-  step: Activity;
-  getDetail: (seq: number) => Promise<string>;
-}) {
+function InterceptCard({ step, getDetail }: { step: Activity; getDetail: (seq: number) => Promise<string> }) {
   // extract pending_id from summary: "工具 Bash 请求审批 (#42)"
   const pendingId = React.useMemo(() => {
     const m = /\(#(\d+)\)/.exec(step.summary);
@@ -217,25 +205,38 @@ function InterceptCard({
     getDetail(step.seq)
       .then((raw) => {
         if (!live || !raw) return;
-        try { setDetail(JSON.parse(raw)); } catch { /* ignore */ }
+        try {
+          setDetail(JSON.parse(raw));
+        } catch {
+          /* ignore */
+        }
       })
-      .catch(() => {/* ignore */});
-    return () => { live = false; };
+      .catch(() => {
+        /* ignore */
+      });
+    return () => {
+      live = false;
+    };
   }, [step.seq, getDetail]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: Retry explicitly reloads the same approval after a failed request.
   React.useEffect(() => {
     if (!pendingId) return;
     let live = true;
-    api.interceptGetOne(pendingId)
+    api
+      .interceptGetOne(pendingId)
       .then((p) => {
         if (!live) return;
         setPending(p);
         setStatusError("");
         if (p.status !== "pending") setDecided(p.status as "allowed" | "denied" | "timeout");
       })
-      .catch((error) => { if (live) setStatusError((error as Error).message || "审批详情加载失败"); });
-    return () => { live = false; };
+      .catch((error) => {
+        if (live) setStatusError((error as Error).message || "审批详情加载失败");
+      });
+    return () => {
+      live = false;
+    };
   }, [pendingId, retry]);
 
   async function decide(decision: "allowed" | "denied") {
@@ -252,11 +253,11 @@ function InterceptCard({
     }
   }
 
-  const inputStr = detail?.input
-    ? JSON.stringify(detail.input).slice(0, 200)
-    : null;
+  const inputStr = detail?.input ? JSON.stringify(detail.input).slice(0, 200) : null;
 
-  const row = pending ? { ...pending, status: decided || pending.status, conv_title: "", conv_agent_key: "", rule_name: "" } : null;
+  const row = pending
+    ? { ...pending, status: decided || pending.status, conv_title: "", conv_agent_key: "", rule_name: "" }
+    : null;
 
   return (
     <div className="my-2 rounded-lg border border-amber-400/50 bg-amber-50/40 dark:bg-amber-950/15 p-3 text-xs">
@@ -269,27 +270,25 @@ function InterceptCard({
               <code className="rounded bg-amber-100 dark:bg-amber-900/50 px-1 font-mono text-amber-800 dark:text-amber-300">
                 {toolName}
               </code>
-              {pendingId && (
-                <span className="text-muted-foreground">#{pendingId}</span>
-              )}
+              {pendingId && <span className="text-muted-foreground">#{pendingId}</span>}
             </div>
-            {inputStr && (
-              <p className="font-mono text-muted-foreground truncate">{inputStr}</p>
-            )}
+            {inputStr && <p className="font-mono text-muted-foreground truncate">{inputStr}</p>}
           </div>
         </div>
 
         {step.inherited ? (
           <Badge variant="outline">历史记录 · 只读</Badge>
         ) : decided ? (
-          <span className={
-            "shrink-0 rounded px-2 py-0.5 text-[11px] font-medium " +
-            (decided === "allowed"
-              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
-              : decided === "timeout"
-                ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400")
-          }>
+          <span
+            className={
+              "shrink-0 rounded px-2 py-0.5 text-[11px] font-medium " +
+              (decided === "allowed"
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
+                : decided === "timeout"
+                  ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                  : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400")
+            }
+          >
             {decided === "allowed" ? "已允许" : decided === "timeout" ? "已超时" : "已拒绝"}
           </span>
         ) : (
@@ -338,9 +337,13 @@ function InterceptCard({
             ) : statusError ? (
               <div className="flex flex-wrap items-center gap-2 p-3" role="alert">
                 <span>{statusError}</span>
-                <Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>重试详情</Button>
+                <Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>
+                  重试详情
+                </Button>
               </div>
-            ) : <p className="p-3 text-muted-foreground">正在加载审批详情…</p>}
+            ) : (
+              <p className="p-3 text-muted-foreground">正在加载审批详情…</p>
+            )}
           </CollapsibleContent>
         </Collapsible>
       ) : null}
@@ -355,20 +358,30 @@ function ToolBlock({
   group,
   getDetail,
   showWorker,
-  focused = false,
+  focused,
+  onLocated,
+  focusLabel = "来源调用",
 }: {
   group: Extract<Group, { type: "tool" }>;
   getDetail: (seq: number) => Promise<string>;
   showWorker?: boolean;
   focused?: boolean;
+  onLocated?: (el: HTMLElement) => void;
+  focusLabel?: string;
 }) {
-  const [open, setOpen] = React.useState(focused);
-  const targetRef = React.useRef<HTMLElement>(null);
+  const [open, setOpen] = React.useState(!!focused);
+  const root = React.useRef<HTMLDivElement>(null);
+  const [loadError, setLoadError] = React.useState(false);
+  const [retry, setRetry] = React.useState(0);
+  React.useEffect(() => {
+    if (focused) setOpen(true);
+  }, [focused]);
   const [detail, setDetail] = React.useState<string | null>(null);
   // what we last loaded, keyed by the underlying step seqs. When the tool result
   // arrives after we expanded mid-run (command only), this key changes and the
   // effect below re-fetches — so the output shows up instead of being cached out.
   const loadedKey = React.useRef<string | null>(null);
+  const [parts, setParts] = React.useState<{ seq: number; text: string }[]>([]);
   const { use, result } = group;
   const toolName = use?.tool || result?.tool || "工具";
   const ToolIcon = toolName === "Bash" ? Terminal : Wrench;
@@ -386,80 +399,87 @@ function ToolBlock({
   const statusText = running ? "执行中…" : ok ? "✓" : "✕ 失败";
 
   // key over the seqs we'd load; changes when the result (or command) arrives.
-  const detailKey = `${use?.seq ?? ""}:${result?.seq ?? ""}`;
+  const detailKey = `${use?.seq ?? ""}:${result?.seq ?? ""}:${retry}`;
   React.useEffect(() => {
     if (!open || loadedKey.current === detailKey) return;
     let live = true;
     const segs: { label: string; seq: number }[] = [];
     if (use) segs.push({ label: "命令", seq: use.seq });
     if (result) segs.push({ label: "输出" + (result.is_error ? " ✕" : " ✓"), seq: result.seq });
-    void Promise.all(
-      segs.map((x) =>
-        getDetail(x.seq)
-          .then((d) => d || "（空）")
-          .catch(() => "（加载失败）"),
-      ),
-    ).then((parts) => {
-      if (!live) return;
-      setDetail(
-        segs
-          .map((x, i) => `【${x.label}】\n${x.label === "命令" ? toolInputText(toolName, parts[i]) : parts[i]}`)
-          .join("\n\n"),
-      );
-      loadedKey.current = detailKey;
-    });
+    setLoadError(false);
+    Promise.all(segs.map((x) => getDetail(x.seq).then((d) => d || "（空）")))
+      .then((parts) => {
+        if (!live) return;
+        setDetail(
+          segs
+            .map(
+              (x, i) =>
+                `【${x.label}】\n${x.label === "命令" && focusLabel !== "搜索结果" ? toolInputText(toolName, parts[i]) : parts[i]}`,
+            )
+            .join("\n\n"),
+        );
+        setParts(
+          segs.map((x, i) => ({
+            seq: x.seq,
+            text: `【${x.label}】\n${x.label === "命令" && focusLabel !== "搜索结果" ? toolInputText(toolName, parts[i]) : parts[i]}`,
+          })),
+        );
+        loadedKey.current = detailKey;
+      })
+      .catch(() => {
+        if (live) setLoadError(true);
+      });
     return () => {
       live = false;
     };
-  }, [open, detailKey, use, result, getDetail, toolName]);
+  }, [open, detailKey, use, result, getDetail, toolName, focusLabel]);
 
-  const scrolledRef = React.useRef(false);
   React.useEffect(() => {
-    scrolledRef.current = false;
-    if (focused) setOpen(true);
-  }, [focused]);
-  React.useEffect(() => {
-    if (!focused || !open || detail === null || scrolledRef.current) return;
-    const el = targetRef.current;
-    const viewport = el?.closest('[data-slot="scroll-area-viewport"]');
-    if (!el || !viewport) return;
-    scrolledRef.current = true;
+    // A failed detail request is also a settled view: keep its retry control
+    // visible at the source call instead of leaving it buried in old history.
+    if (!focused || !open || (!detail && !loadError) || !root.current) return;
+    if (onLocated) {
+      const frame = requestAnimationFrame(() => {
+        if (root.current) onLocated(root.current);
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+    const el = root.current;
+    const viewport = el.closest('[data-slot="scroll-area-viewport"]');
+    if (!viewport) return;
     const center = () => {
-      const rect = el.getBoundingClientRect();
-      const bounds = viewport.getBoundingClientRect();
+      const rect = el.getBoundingClientRect(),
+        bounds = viewport.getBoundingClientRect();
       viewport.scrollTop += rect.top + rect.height / 2 - bounds.top - bounds.height / 2;
     };
-    // User bubbles load their full text lazily. Allow their initial layout to
-    // settle, but stop anchoring immediately if the user interacts or after 2s.
     const observer = new ResizeObserver(center);
     observer.observe(el.parentElement ?? el);
     observer.observe(viewport);
     const stop = () => observer.disconnect();
-    viewport.addEventListener("wheel", stop, { passive: true, once: true });
-    viewport.addEventListener("touchstart", stop, { passive: true, once: true });
-    viewport.addEventListener("pointerdown", stop, { once: true });
-    const frame = requestAnimationFrame(center);
-    const timer = setTimeout(stop, 2000);
+    for (const event of ["wheel", "touchstart", "pointerdown", "keydown"])
+      viewport.addEventListener(event, stop, { passive: true, once: true });
+    const frame = requestAnimationFrame(center),
+      timer = setTimeout(stop, 2000);
     return () => {
       cancelAnimationFrame(frame);
       clearTimeout(timer);
       stop();
-      viewport.removeEventListener("wheel", stop);
-      viewport.removeEventListener("touchstart", stop);
-      viewport.removeEventListener("pointerdown", stop);
+      for (const event of ["wheel", "touchstart", "pointerdown", "keydown"]) viewport.removeEventListener(event, stop);
     };
-  }, [focused, open, detail]);
+  }, [focused, open, detail, loadError, onLocated]);
 
   function toggle() {
     setOpen((o) => !o);
   }
 
   return (
-    <section
-      ref={targetRef}
-      aria-label={focused ? `定位的工具调用 #${use?.seq}` : undefined}
-      className={focused ? "rounded-lg border-2 border-primary bg-primary/5 p-3 text-xs" : "text-xs"}
+    <div
+      ref={root}
+      data-source-call={focused || undefined}
+      data-activity-id={use?.seq ?? result?.seq}
+      className={cn("text-xs", focused && "rounded-md border border-primary bg-accent/30 p-2")}
     >
+      {focused && <Badge variant="outline">{focusLabel}</Badge>}
       <button type="button" onClick={toggle} className="flex w-full items-start gap-2 py-1 text-left hover:bg-muted/40">
         <span className="mt-0.5 text-muted-foreground">
           {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
@@ -471,11 +491,27 @@ function ToolBlock({
         <span className={"ml-auto shrink-0 font-medium " + statusTone}>{statusText}</span>
       </button>
       {open && (
-        <pre className="ml-7 mb-1 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed">
-          {detail ?? "加载中…"}
+        <pre
+          data-search-body
+          className="ml-7 mb-1 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed"
+        >
+          {loadError ? (
+            <Button size="sm" variant="outline" onClick={() => setRetry((n) => n + 1)}>
+              加载失败，重试
+            </Button>
+          ) : detail ? (
+            parts.map((part) => (
+              <span key={part.seq} data-search-activity={part.seq}>
+                {part.text}
+                {"\n\n"}
+              </span>
+            ))
+          ) : (
+            "加载中…"
+          )}
         </pre>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -579,7 +615,15 @@ function parseUserBody(body: string): { text: string; attachments: MsgAttachment
   return { text: body, attachments: [] };
 }
 
-function UserRow({ step, intent, getDetail }: { step: Activity; intent?: boolean; getDetail: (seq: number) => Promise<string> }) {
+function UserRow({
+  step,
+  intent,
+  getDetail,
+}: {
+  step: Activity;
+  intent?: boolean;
+  getDetail: (seq: number) => Promise<string>;
+}) {
   const Icon = intent ? CrosshairIcon : UserIcon;
   const [ref, inView] = useInView();
   // Optimistic echoes carry their detail inline; persisted rows lazy-load it on scroll.
@@ -602,7 +646,7 @@ function UserRow({ step, intent, getDetail }: { step: Activity; intent?: boolean
   }, [inView, step.seq, getDetail, step.summary, inline]);
   const { text, attachments } = parseUserBody(full ?? step.summary);
   return (
-    <div ref={ref} className="mt-3 mb-2 flex min-w-0 justify-end gap-2">
+    <div ref={ref} data-activity-id={step.seq} className="mt-5 mb-4 flex min-w-0 justify-end gap-2">
       <div className="flex min-w-0 max-w-[85%] flex-col items-end gap-1.5">
         {attachments.length > 0 && (
           <div className="flex min-w-0 max-w-full flex-wrap justify-end gap-1.5">
@@ -620,7 +664,7 @@ function UserRow({ step, intent, getDetail }: { step: Activity; intent?: boolean
           </div>
         )}
         {text && (
-          <div className="min-w-0 max-w-full whitespace-pre-wrap rounded-lg rounded-tr-sm bg-primary px-3 py-1.5 text-sm text-primary-foreground [overflow-wrap:anywhere]">
+          <div className="min-w-0 max-w-full whitespace-pre-wrap rounded-2xl bg-muted px-4 py-3 text-sm text-foreground leading-relaxed [overflow-wrap:anywhere]">
             {text}
           </div>
         )}
@@ -654,20 +698,73 @@ function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: num
     };
   }, [inView, step.seq, getDetail, step.summary]);
   return (
-    <div ref={ref} className="mb-2 mt-1 flex min-w-0 flex-col gap-1">
+    <div ref={ref} data-activity-id={step.seq} className="mb-2 mt-1 flex min-w-0 flex-col gap-1">
       <div
         className={
-          "min-w-0 flex-1 break-words rounded-lg bg-muted px-3 py-2 " +
+          "min-w-0 flex-1 break-words px-1 py-3 text-sm leading-relaxed " +
           (step.is_error ? "text-sm text-red-600 dark:text-red-400" : "")
         }
       >
-        {step.is_error ? (
+        {step.is_error && !step.metadata?.worker_feedback ? (
           <span className="whitespace-pre-wrap">{full ?? step.summary}</span>
         ) : (
           <Markdown text={full ?? step.summary} />
         )}
       </div>
       <ActivityTime ts={step.ts} />
+    </div>
+  );
+}
+
+// Focused ordinary messages load their exact body even when outside the viewport.
+function LocatedActivity({
+  step,
+  getDetail,
+  onLocated,
+}: {
+  step: Activity;
+  getDetail: (seq: number) => Promise<string>;
+  onLocated?: (el: HTMLElement) => void;
+}) {
+  const root = React.useRef<HTMLDivElement>(null);
+  const [body, setBody] = React.useState<string | null>(null);
+  const [error, setError] = React.useState(false);
+  const [retry, setRetry] = React.useState(0);
+  React.useEffect(() => {
+    let current = true;
+    setBody(null);
+    setError(false);
+    getDetail(step.seq)
+      .then((v) => {
+        if (current) setBody(v || step.summary);
+      })
+      .catch(() => {
+        if (current) setError(true);
+      });
+    return () => {
+      current = false;
+    };
+  }, [step.seq, step.summary, getDetail, retry]);
+  React.useEffect(() => {
+    if (body === null && !error) return;
+    const frame = requestAnimationFrame(() => {
+      if (root.current) onLocated?.(root.current);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [body, error, onLocated]);
+  return (
+    <div ref={root} data-activity-id={step.seq} className="min-w-0 rounded-md border border-primary p-2">
+      {error ? (
+        <Button variant="outline" size="sm" onClick={() => setRetry((n) => n + 1)}>
+          详情加载失败，重试
+        </Button>
+      ) : body === null ? (
+        "加载中…"
+      ) : (
+        <div data-search-body>
+          <Markdown text={body} />
+        </div>
+      )}
     </div>
   );
 }
@@ -681,13 +778,17 @@ function ExecView({
   taskId,
   chat,
   fetchDetail,
-  focusedSeq,
+  focusActivity,
+  onLocated,
+  focusLabel = "来源调用",
 }: {
   activity: Activity[];
   taskId?: string;
   chat?: boolean;
   fetchDetail?: (seq: number) => Promise<string>;
-  focusedSeq?: number;
+  focusActivity?: number;
+  onLocated?: (el: HTMLElement) => void;
+  focusLabel?: string;
 }) {
   const showWorker = new Set(activity.map((a) => a.worker)).size > 1;
   // default detail fetcher: the task-scoped activity endpoint. The chat page passes
@@ -699,12 +800,36 @@ function ExecView({
   return (
     <div className="flex flex-col">
       {groupSteps(activity, !!chat).map((g) =>
-        g.type === "round" ? (
+        g.type === "round" && g.key === focusActivity ? (
+          <LocatedActivity
+            key={`located-${g.key}`}
+            step={activity.find((a) => a.seq === g.key)!}
+            getDetail={getDetail}
+            onLocated={onLocated}
+          />
+        ) : g.type === "round" ? (
           <div key={"r" + g.key} className="my-2 flex items-center gap-2 text-[10px] font-medium text-muted-foreground">
             <span className="h-px flex-1 bg-border" />
             {g.label}
             <span className="h-px flex-1 bg-border" />
           </div>
+        ) : (g.type === "user" || g.type === "answer") && g.step.seq === focusActivity ? (
+          <LocatedActivity key={`located-${g.key}`} step={g.step} getDetail={getDetail} onLocated={onLocated} />
+        ) : g.type === "msg" && g.steps.some((s) => s.seq === focusActivity) ? (
+          <React.Fragment key={`located-${g.key}`}>
+            {g.steps.map((step) =>
+              step.seq === focusActivity ? (
+                <LocatedActivity key={step.seq} step={step} getDetail={getDetail} onLocated={onLocated} />
+              ) : (
+                <MessageBlock
+                  key={step.seq}
+                  group={{ ...g, steps: [step] }}
+                  getDetail={getDetail}
+                  showWorker={showWorker}
+                />
+              ),
+            )}
+          </React.Fragment>
         ) : g.type === "user" ? (
           <UserRow key={"u" + g.key} step={g.step} intent={g.intent} getDetail={getDetail} />
         ) : g.type === "answer" ? (
@@ -715,8 +840,15 @@ function ExecView({
             group={g}
             getDetail={getDetail}
             showWorker={showWorker}
-            focused={focusedSeq != null && g.use?.seq === focusedSeq}
+            focused={!!focusActivity && (g.use?.seq === focusActivity || g.result?.seq === focusActivity)}
+            onLocated={onLocated}
+            focusLabel={focusLabel}
           />
+        ) : g.type === "intercept" && g.step.seq === focusActivity ? (
+          <React.Fragment key={`located-${g.key}`}>
+            <LocatedActivity step={g.step} getDetail={getDetail} onLocated={onLocated} />
+            <InterceptCard step={g.step} getDetail={getDetail} />
+          </React.Fragment>
         ) : g.type === "intercept" ? (
           <InterceptCard key={"ic" + g.key} step={g.step} getDetail={getDetail} />
         ) : (
@@ -736,19 +868,28 @@ export function Transcript({
   taskId,
   chat,
   fetchDetail,
+  focusActivity,
   focusedSeq,
+  onLocated,
+  focusLabel = "来源调用",
 }: {
   activity: Activity[];
   live?: boolean;
   taskId?: string;
   chat?: boolean;
   fetchDetail?: (seq: number) => Promise<string>;
+  focusActivity?: number;
   focusedSeq?: number;
+  onLocated?: (el: HTMLElement) => void;
+  focusLabel?: string;
 }) {
   const transcriptRef = React.useRef<HTMLDivElement>(null);
   const [focusPadding, setFocusPadding] = React.useState(0);
   React.useLayoutEffect(() => {
-    if (focusedSeq == null) { setFocusPadding(0); return; }
+    if (focusedSeq == null) {
+      setFocusPadding(0);
+      return;
+    }
     const viewport = transcriptRef.current?.closest('[data-slot="scroll-area-viewport"]');
     if (!viewport) return;
     const measure = () => setFocusPadding(viewport.clientHeight / 2);
@@ -758,8 +899,20 @@ export function Transcript({
     return () => observer.disconnect();
   }, [focusedSeq]);
   return (
-    <div ref={transcriptRef} className="flex flex-col gap-1" style={focusPadding ? { paddingBlock: focusPadding } : undefined}>
-      <ExecView activity={activity} taskId={taskId} chat={chat} fetchDetail={fetchDetail} focusedSeq={focusedSeq} />
+    <div
+      ref={transcriptRef}
+      className="flex flex-col gap-1"
+      style={focusPadding ? { paddingBlock: focusPadding } : undefined}
+    >
+      <ExecView
+        activity={activity}
+        taskId={taskId}
+        chat={chat}
+        fetchDetail={fetchDetail}
+        focusActivity={focusActivity ?? focusedSeq}
+        onLocated={onLocated}
+        focusLabel={focusLabel}
+      />
       {live && (
         <div className="flex items-center gap-2 pl-2 pt-1 text-xs text-muted-foreground">
           <span className="flex gap-1">

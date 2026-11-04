@@ -120,6 +120,23 @@ func TestTaskArchiveFormatCompatibility(t *testing.T) {
 	}
 }
 
+func TestRemainingPausedTimeoutUsesPauseInstant(t *testing.T) {
+	pausedAt := time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC)
+	deadline := pausedAt.Add(15 * time.Minute)
+	archivedAt := pausedAt.Add(2 * time.Hour)
+	if got := remainingPausedTimeout(deadline, &pausedAt, 20*60, archivedAt); got != 15*60 {
+		t.Fatalf("paused task lost budget during archive: got %d seconds", got)
+	}
+	// Legacy paused rows did not always have paused_at. Preserve at least the
+	// configured timeout instead of treating archival delay as runtime.
+	if got := remainingPausedTimeout(deadline, nil, 20*60, archivedAt); got != 20*60 {
+		t.Fatalf("legacy pause should retain conservative budget: got %d", got)
+	}
+	if got := remainingPausedTimeout(pausedAt.Add(-time.Second), &pausedAt, 20*60, archivedAt); got != 0 {
+		t.Fatalf("expired deadline gained time: %d", got)
+	}
+}
+
 func TestTaskArchiveDatabaseRoundTrip(t *testing.T) {
 	d, err := Open(testDSN(t))
 	if err != nil {
@@ -137,6 +154,10 @@ func TestTaskArchiveDatabaseRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	var companyID, llmProfileID int64
+	mainSession, err := d.Exploration(task.ExplorationID).NewMainSession()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := d.QueryRow(`INSERT INTO companies(name,nkey) VALUES($1,$2) RETURNING id`,
 		fmt.Sprintf("archive-company-%d", task.ID), fmt.Sprintf("archive-company-%d", task.ID)).Scan(&companyID); err != nil {
 		t.Fatal(err)
@@ -166,11 +187,40 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	if err := d.SetPaused(task.ID, true); err != nil {
 		t.Fatal(err)
 	}
+	pauseInstant := time.Now().UTC().Add(-2 * time.Hour)
+	if _, err := d.Exec(`UPDATE tasks SET paused_at=$2, deadline_at=$3, timeout_seconds=1800 WHERE id=$1`,
+		task.ID, pauseInstant, pauseInstant.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	assetID, err := d.Assets().UpsertRootDomain(UpsertRootDomainReq{Domain: fmt.Sprintf("archive-%d.example", task.ID), TaskID: task.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
+	blockedAssetID, err := d.Assets().UpsertRootDomain(UpsertRootDomainReq{Domain: fmt.Sprintf("archive-blocked-%d.example", task.ID), TaskID: task.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = d.Assets().DeleteByIDs([]int64{assetID, blockedAssetID}) }()
+	if err := d.Assets().RevokeTaskAssets(task.ID, []int64{assetID}, "archive-test", "preserve revoked approval"); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := d.Assets().RememberTaskAssetDenials(task.ID, nil, []int64{assetID}); err != nil || len(rows) != 1 {
+		t.Fatalf("remember skip: %v %v", rows, err)
+	}
+	if detached, err := d.Assets().DetachAssetFromTask(task.ID, blockedAssetID); err != nil || !detached {
+		t.Fatalf("prepare archived tombstone detached=%v err=%v", detached, err)
+	}
 	store := d.Exploration(task.ExplorationID)
+	if _, err := store.SetExecutionMode(ExecutionManual); err != nil {
+		t.Fatal(err)
+	}
+	selectedID, err := store.AddIntent(map[string]any{"summary": "archive selected", "dispatch_requested": true}, 1, nil, "mainagent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.GrantMainIntentDispatch(selectedID); err != nil {
+		t.Fatal(err)
+	}
 	nodeID, err := store.AddNode(KindFact, map[string]any{"summary": "archived fact", "asset_ids": []int64{assetID}}, 1, "confirmed", "worker", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -197,12 +247,36 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.AddFinding(task.ID, nodeID, vulnclass, "archive finding", SeverityCritical, "summary", "evidence", "worker", []int64{assetID}); err != nil {
+	findingID, err := d.AddFinding(task.ID, nodeID, vulnclass, "archive finding", SeverityCritical, "summary", "evidence", "worker", []int64{assetID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`INSERT INTO finding_retests(finding_id,status,verdict,snapshot,summary) VALUES($1,'completed','inconclusive','{}','archived retest')`, findingID); err != nil {
+		t.Fatal(err)
+	}
+	deletedID, err := d.AddFinding(task.ID, 0, "IDOR", "deleted fixture", "high", "summary", "private evidence", "worker", []int64{assetID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.DeleteFindingWithFeedback(deletedID, "do not repeat"); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := d.FindingSuppressionRules(t.Context(), task.ID, 0, 20, false)
+	if err != nil || len(rules) != 1 {
+		t.Fatal(rules, err)
+	}
+	if err = d.RevokeFindingSuppression(t.Context(), task.ID, rules[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = d.Exploration(task.ExplorationID).SavePlannerTodos(t.Context(), []map[string]any{{"content": "archive planner todo", "status": "pending"}}); err != nil {
 		t.Fatal(err)
 	}
 	archive, err := d.QueueTaskArchive(task.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if archive.RemainingTimeoutSeconds != 600 {
+		t.Fatalf("archived pause budget=%d, want 600", archive.RemainingTimeoutSeconds)
 	}
 	claimed, err := d.ClaimTaskArchiveJob(t.Context())
 	if err != nil || claimed == nil || claimed.ID != archive.ID || claimed.State != Archiving {
@@ -213,13 +287,16 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	if err != nil {
 		t.Fatal(err)
 	}
+	if rawRowCount(snapshot.Tables["planner_working_state"]) != 1 {
+		t.Fatal("planner state not archived")
+	}
 	if snapshot.StreamedTables["llm_records"] != TaskArchiveLLMRecordsPath || snapshot.DataCounts["llm_records"] != 1 {
 		t.Fatalf("unexpected streamed LLM metadata: paths=%v counts=%v", snapshot.StreamedTables, snapshot.DataCounts)
 	}
 	if rawRowCount(snapshot.Tables["llm_records"]) != 0 {
 		t.Fatal("streamed LLM records were also retained in manifest memory")
 	}
-	if snapshot.DataCounts["assets"] != 1 || snapshot.DataCounts["exploration_nodes"] < 2 {
+	if snapshot.DataCounts["assets"] != 2 || snapshot.DataCounts["task_asset_blocks"] != 1 || snapshot.DataCounts["exploration_nodes"] < 2 {
 		t.Fatalf("unexpected snapshot counts: %#v", snapshot.DataCounts)
 	}
 	if err := d.CompleteTaskArchive(archive.ID, snapshot, "/tmp/test-task.tar.zst", "abc", 100, 50); err != nil {
@@ -264,10 +341,18 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 		t.Fatalf("restore claim = %+v, %v", claimed, err)
 	}
 	warnings, err := d.RestoreTaskArchiveWithLLMRecords(
-		archive.ID, snapshot, int64((10 * time.Minute).Seconds()), bytes.NewReader(llmRecords.Bytes()),
+		archive.ID, snapshot, archive.RemainingTimeoutSeconds, bytes.NewReader(llmRecords.Bytes()),
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	restoredRules, err := d.FindingSuppressionRules(t.Context(), task.ID, 0, 20, false)
+	if err != nil || len(restoredRules) != 1 || restoredRules[0].RevokedAt == nil || restoredRules[0].ID != rules[0].ID {
+		t.Fatal("suppression archive lost", restoredRules, err)
+	}
+	feedback, err := d.Exploration(task.ExplorationID).FindingDeletionFeedback(0, 20)
+	if err != nil || len(feedback) != 1 || feedback[0].RuleStatus != "revoked" {
+		t.Fatal("feedback archive lost", feedback, err)
 	}
 	warningFound := false
 	for _, warning := range warnings {
@@ -279,11 +364,37 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 		t.Fatalf("missing deleted company warning: %v", warnings)
 	}
 	live, err := d.GetTask(task.ID)
+	if retests, err := d.ListFindingRetests(findingID); err != nil || len(retests) != 1 || retests[0].Summary != "archived retest" {
+		t.Fatalf("retest history lost on restore: %+v %v", retests, err)
+	}
+	if seg, err := d.Exploration(task.ExplorationID).CurrentMainSeg(); err != nil || seg != mainSession.Seq {
+		t.Fatalf("main session lost on restore: %d %v", seg, err)
+	}
 	if err != nil || live == nil {
 		t.Fatalf("restored task = %+v, %v", live, err)
 	}
+	var restoredPause, restoredDeadline time.Time
+	if err := d.QueryRow(`SELECT paused_at,deadline_at FROM tasks WHERE id=$1`, task.ID).Scan(&restoredPause, &restoredDeadline); err != nil {
+		t.Fatal(err)
+	}
+	if delta := time.Since(restoredPause); delta < 0 || delta > time.Minute {
+		t.Fatalf("restored paused_at is stale: %v", restoredPause)
+	}
+	if budget := restoredDeadline.Sub(restoredPause); budget < 599*time.Second || budget > 601*time.Second {
+		t.Fatalf("restored pause budget=%v, want 10m", budget)
+	}
+	selected, selectedErr := d.Exploration(task.ExplorationID).GetNode(selectedID)
+	if selectedErr != nil || selected == nil || !selected.DispatchRequested() || !selected.AllowsPendingAssets() {
+		t.Fatalf("dispatch selection lost: %+v %v", selected, selectedErr)
+	}
+	if live.ExecutionMode != ExecutionManual {
+		t.Fatalf("mode lost: %s", live.ExecutionMode)
+	}
 	if live.Name != "cold task" || !live.Paused {
 		t.Fatalf("restored task metadata mismatch: %+v", live)
+	}
+	if rows, err := d.Assets().ActiveTaskAssetSkips(task.ID); err != nil || len(rows) != 1 || rows[0].State != ApprovalRevoked {
+		t.Fatalf("restored skips: %v %v", rows, err)
 	}
 	if err := d.QueryRow(`SELECT count(*) FROM exploration_nodes WHERE exploration_id=$1`, task.ExplorationID).Scan(&nodes); err != nil {
 		t.Fatal(err)
@@ -296,6 +407,16 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	}
 	if nodes < 2 || assets != 1 || usage != 1 {
 		t.Fatalf("restore incomplete nodes=%d assets=%d usage=%d", nodes, assets, usage)
+	}
+	var restoredApproval string
+	if err := d.QueryRow(`SELECT approval_state FROM task_asset_links WHERE task_id=$1 AND asset_id=$2`, task.ID, assetID).Scan(&restoredApproval); err != nil {
+		t.Fatal(err)
+	}
+	if restoredApproval != ApprovalRevoked {
+		t.Fatalf("restored approval=%q, want revoked", restoredApproval)
+	}
+	if err := d.Assets().ValidateTaskAssetsApproved(task.ID, []int64{blockedAssetID}); !errors.Is(err, ErrTaskAssetBlocked) {
+		t.Fatalf("restored tombstone validation=%v, want ErrTaskAssetBlocked", err)
 	}
 	var restoredRawRequest, restoredRawResponse string
 	if err := d.QueryRow(`SELECT COALESCE(raw_request,''),COALESCE(raw_response,'') FROM llm_records WHERE task_id=$1`, fmt.Sprint(task.ID)).
@@ -326,6 +447,9 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	assertArchiveGlobalStats(t, d, profileName, skillName, toolName, vulnclass)
 	if err := d.CompleteTaskArchiveRestore(archive.ID); err != nil {
 		t.Fatal(err)
+	}
+	if raw, e := d.Exploration(task.ExplorationID).PlannerTodos(t.Context()); e != nil || !strings.Contains(string(raw), "archive planner todo") {
+		t.Fatal("planner state not restored", string(raw), e)
 	}
 	if item, err := d.GetTaskArchive(archive.ID); err != nil || item != nil {
 		t.Fatalf("archive metadata must be consumed: %+v, %v", item, err)
@@ -362,6 +486,13 @@ func TestTaskArchiveBlockersIgnoreQueuedDependents(t *testing.T) {
 	if blockers[source.ID] != dependent.ID {
 		t.Fatalf("source blocker=%d, want dependent %d", blockers[source.ID], dependent.ID)
 	}
+	blocker, err := d.TaskArchiveBlocker(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocker != dependent.ID {
+		t.Fatalf("scoped source blocker=%d, want dependent %d", blocker, dependent.ID)
+	}
 	if err := d.SetPaused(dependent.ID, true); err != nil {
 		t.Fatal(err)
 	}
@@ -374,6 +505,13 @@ func TestTaskArchiveBlockersIgnoreQueuedDependents(t *testing.T) {
 	}
 	if blocker := blockers[source.ID]; blocker != 0 {
 		t.Fatalf("queued dependent must not block source, got %d", blocker)
+	}
+	blocker, err = d.TaskArchiveBlocker(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocker != 0 {
+		t.Fatalf("scoped queued dependent must not block source, got %d", blocker)
 	}
 }
 

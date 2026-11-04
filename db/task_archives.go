@@ -104,6 +104,24 @@ GROUP BY relation.source_task_id`)
 	return blockers, rows.Err()
 }
 
+// TaskArchiveBlocker returns the first live direct dependent for one source
+// task. Detail pages use this scoped form instead of scanning every relation.
+func (d *DB) TaskArchiveBlocker(taskID int64) (int64, error) {
+	return d.TaskArchiveBlockerContext(context.Background(), taskID)
+}
+
+// TaskArchiveBlockerContext is the request-cancelable scoped blocker lookup.
+func (d *DB) TaskArchiveBlockerContext(ctx context.Context, taskID int64) (int64, error) {
+	var blocker int64
+	err := d.QueryRowContext(ctx, `SELECT COALESCE(MIN(child.id),0)
+FROM task_relations relation
+JOIN tasks child ON child.id=relation.task_id AND child.deleted_at IS NULL
+LEFT JOIN task_archives pending ON pending.task_id=child.id
+WHERE relation.source_task_id=$1
+  AND (pending.id IS NULL OR pending.state NOT IN ('archive_queued','archiving'))`, taskID).Scan(&blocker)
+	return blocker, err
+}
+
 type TaskArchivePage struct {
 	Items []TaskArchive `json:"items"`
 	Total int           `json:"total"`
@@ -226,12 +244,13 @@ func (d *DB) QueueTaskArchive(taskID int64) (*TaskArchive, error) {
 	var name, description, goal, status, categoryName string
 	var categoryID *int64
 	var paused, queued bool
-	var deadline *time.Time
+	var deadline, pausedAt *time.Time
+	var timeoutSeconds int64
 	err = tx.QueryRow(`SELECT COALESCE(t.name,''), t.description, t.goal, t.status,
- t.category_id, COALESCE(c.name,''), t.paused, t.queued, t.deadline_at
+ t.category_id, COALESCE(c.name,''), t.paused, t.queued, t.deadline_at, t.paused_at, t.timeout_seconds
 FROM tasks t LEFT JOIN task_categories c ON c.id=t.category_id
 WHERE t.id=$1 AND t.deleted_at IS NULL FOR UPDATE OF t`, taskID).Scan(
-		&name, &description, &goal, &status, &categoryID, &categoryName, &paused, &queued, &deadline,
+		&name, &description, &goal, &status, &categoryID, &categoryName, &paused, &queued, &deadline, &pausedAt, &timeoutSeconds,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrTaskArchiveNotFound
@@ -279,10 +298,7 @@ LIMIT 1`, taskID).Scan(&dependent)
 	}
 	remaining := int64(0)
 	if paused && deadline != nil {
-		remaining = int64(time.Until(*deadline).Seconds())
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining = remainingPausedTimeout(*deadline, pausedAt, timeoutSeconds, time.Now())
 	}
 	_, err = tx.Exec(`INSERT INTO task_archives(
  task_id,state,phase,progress,error,warnings,format_version,task_name,
@@ -309,6 +325,28 @@ VALUES ($1,$2,'queued',0,'','[]',$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
 		return nil, fmt.Errorf("%w: current state %s", ErrTaskArchiveState, item.State)
 	}
 	return item, tx.Commit()
+}
+
+func remainingPausedTimeout(deadline time.Time, pausedAt *time.Time, timeoutSeconds int64, now time.Time) int64 {
+	basis := now
+	if pausedAt != nil {
+		basis = *pausedAt
+	}
+	budget := deadline.Sub(basis)
+	// Older paused rows can lack paused_at. Their original pause time is
+	// unknowable, so avoid expiring them during archival when a configured
+	// timeout gives us a safe upper bound.
+	if pausedAt == nil && timeoutSeconds > 0 && budget < time.Duration(timeoutSeconds)*time.Second {
+		budget = time.Duration(timeoutSeconds) * time.Second
+	}
+	if budget <= 0 {
+		return 0
+	}
+	remaining := int64(budget / time.Second)
+	if budget%time.Second != 0 {
+		remaining++
+	}
+	return remaining
 }
 
 func (d *DB) QueueTaskArchiveRestore(id int64) (*TaskArchive, error) {
@@ -528,12 +566,14 @@ func rawRowCount(raw json.RawMessage) int64 {
 func archiveAssetIDsQuery() string {
 	return `SELECT id FROM assets WHERE $1=ANY(task_ids)
 UNION SELECT link.asset_id FROM task_asset_links link WHERE link.task_id=$1
+UNION SELECT block.asset_id FROM task_asset_blocks block WHERE block.task_id=$1 AND block.asset_id IS NOT NULL
 UNION SELECT anchor.asset_id FROM exploration_anchors anchor
       JOIN exploration_nodes node ON node.id=anchor.node_id WHERE node.exploration_id=$2
 UNION SELECT value::bigint FROM findings finding
       CROSS JOIN LATERAL jsonb_array_elements_text(
         CASE WHEN jsonb_typeof(finding.asset_ids)='array' THEN finding.asset_ids ELSE '[]'::jsonb END
-      ) value WHERE finding.task_id=$1 AND value ~ '^[0-9]+$'`
+      ) value WHERE finding.task_id=$1 AND value ~ '^[0-9]+$'
+UNION SELECT value::bigint FROM finding_suppression_rules rule CROSS JOIN LATERAL jsonb_array_elements_text(rule.asset_ids) value WHERE rule.task_id=$1 AND value ~ '^[0-9]+$'`
 }
 
 // SnapshotTaskArchive reads one repeatable PostgreSQL snapshot. Task-owned Agent
@@ -577,6 +617,8 @@ func (d *DB) snapshotTaskArchive(taskID int64, llmRecords io.Writer) (*TaskArchi
 	}{
 		{"tasks", `SELECT * FROM tasks WHERE id=$1`, []any{taskID}},
 		{"explorations", `SELECT * FROM explorations WHERE id=$1`, []any{expID}},
+		{"deleted_workers", `SELECT * FROM deleted_workers WHERE exploration_id=$1 ORDER BY intent_id`, []any{expID}},
+		{"planner_working_state", `SELECT * FROM planner_working_state WHERE exploration_id=$1`, []any{expID}},
 		{"exploration_nodes", `SELECT * FROM exploration_nodes WHERE exploration_id=$1 ORDER BY id`, []any{expID}},
 		{"exploration_edges", `SELECT * FROM exploration_edges WHERE exploration_id=$1 ORDER BY src_id,dst_id`, []any{expID}},
 		{"exploration_anchors", `SELECT anchor.* FROM exploration_anchors anchor JOIN exploration_nodes node ON node.id=anchor.node_id WHERE node.exploration_id=$1 ORDER BY node_id,asset_id`, []any{expID}},
@@ -584,15 +626,24 @@ func (d *DB) snapshotTaskArchive(taskID int64, llmRecords io.Writer) (*TaskArchi
 		{"activity", `SELECT * FROM activity WHERE exploration_id=$1 ORDER BY id`, []any{expID}},
 		{"task_relations", `SELECT * FROM task_relations WHERE task_id=$1 ORDER BY created_at,source_task_id`, []any{taskID}},
 		{"task_asset_links", `SELECT * FROM task_asset_links WHERE task_id=$1 ORDER BY asset_id`, []any{taskID}},
+		{"task_asset_blocks", `SELECT * FROM task_asset_blocks WHERE task_id=$1 ORDER BY asset_key`, []any{taskID}},
+		{"task_asset_skips", `SELECT * FROM task_asset_skips WHERE task_id=$1 ORDER BY host`, []any{taskID}},
+		{"task_asset_grants", `SELECT * FROM task_asset_grants WHERE task_id=$1 ORDER BY kind,value`, []any{taskID}},
+		{"task_asset_dns_evidence", `SELECT * FROM task_asset_dns_evidence WHERE task_id=$1 ORDER BY dns_asset_id,ip`, []any{taskID}},
 		{"task_llm_profiles", `SELECT * FROM task_llm_profiles WHERE task_id=$1 ORDER BY position`, []any{taskID}},
 		{"task_scope", `SELECT * FROM task_scope WHERE task_id=$1 ORDER BY id`, []any{taskID}},
+		{"main_sessions", `SELECT * FROM main_sessions WHERE exploration_id=$1 ORDER BY seq`, []any{expID}},
 		{"findings", `SELECT * FROM findings WHERE task_id=$1 ORDER BY id`, []any{taskID}},
+		{"finding_deletion_feedback", `SELECT * FROM finding_deletion_feedback WHERE task_id=$1 ORDER BY id`, []any{taskID}},
+		{"finding_suppression_rules", `SELECT * FROM finding_suppression_rules WHERE task_id=$1 ORDER BY id`, []any{taskID}},
+		{"finding_retests", `SELECT r.* FROM finding_retests r JOIN findings f ON f.id=r.finding_id WHERE f.task_id=$1 ORDER BY r.id`, []any{taskID}},
 		{"finding_traffic_bindings", `SELECT b.* FROM finding_traffic_bindings b JOIN findings f ON f.id=b.finding_id WHERE f.task_id=$1 ORDER BY b.finding_id,b.position,b.id`, []any{taskID}},
 		{"traffic_evidence_snapshots", `SELECT s.* FROM traffic_evidence_snapshots s WHERE EXISTS(SELECT 1 FROM finding_traffic_bindings b JOIN findings f ON f.id=b.finding_id WHERE b.snapshot_id=s.id AND f.task_id=$1) ORDER BY s.id`, []any{taskID}},
 		{"llm_records", `SELECT * FROM llm_records WHERE COALESCE(task_id,'')=$1 ORDER BY id`, []any{strconv.FormatInt(taskID, 10)}},
 		{"llm_usage", `SELECT * FROM llm_usage WHERE COALESCE(task_id,'')=$1 OR exploration_id=$2 ORDER BY id`, []any{strconv.FormatInt(taskID, 10), expID}},
 		{"skill_usage", `SELECT * FROM skill_usage WHERE task_id=$1 OR exploration_id=$2 ORDER BY id`, []any{taskID, expID}},
 		{"tool_usage", `SELECT * FROM tool_usage WHERE task_id=$1 OR exploration_id=$2 ORDER BY id`, []any{taskID, expID}},
+		{"mcp_usage", `SELECT * FROM mcp_usage WHERE task_id=$1 OR exploration_id=$2 ORDER BY id`, []any{taskID, expID}},
 		{"intercept_pending", `SELECT * FROM intercept_pending WHERE COALESCE(task_id,'')=$1 ORDER BY id`, []any{strconv.FormatInt(taskID, 10)}},
 		{"side_question_sessions", `SELECT * FROM side_question_sessions WHERE task_id=$1 ORDER BY session_key`, []any{taskID}},
 		{"side_question_requests", `SELECT r.* FROM side_question_requests r JOIN side_question_sessions s ON s.session_key=r.session_key WHERE s.task_id=$1 ORDER BY r.ordinal`, []any{taskID}},
@@ -750,6 +801,12 @@ SELECT skill,count(*) calls,0 tasks,
        max(ts) last_used
 FROM skill_usage WHERE (task_id=$1 OR exploration_id=$2) AND NOT found GROUP BY skill) x`, []any{taskID, expID}},
 		{"tools", `SELECT COALESCE(jsonb_object_agg(name,n),'{}'::jsonb) FROM (SELECT tool_key name,count(*) n FROM tool_usage WHERE task_id=$1 OR exploration_id=$2 GROUP BY tool_key) x`, []any{taskID, expID}},
+		{"mcp_stats", `SELECT COALESCE(jsonb_agg(to_jsonb(x)),'[]'::jsonb) FROM (
+SELECT COALESCE(server_id,0) server_id, max(server_name) server_name, tool_name, count(*) calls,
+       count(DISTINCT task_id) FILTER (WHERE task_id IS NOT NULL) tasks,
+       COALESCE(array_agg(DISTINCT agent_key) FILTER (WHERE agent_key IS NOT NULL),ARRAY[]::text[]) agents,
+       max(ts) last_used
+FROM mcp_usage WHERE task_id=$1 OR exploration_id=$2 GROUP BY server_id,tool_name) x`, []any{taskID, expID}},
 		{"findings", `SELECT COALESCE(jsonb_object_agg(name,n),'{}'::jsonb) FROM (SELECT COALESCE(NULLIF(severity,''),'unknown') name,count(*) n FROM findings WHERE task_id=$1 GROUP BY severity) x`, []any{taskID}},
 		{"finding_stats", `SELECT jsonb_build_object(
  'total',count(*),'pending',count(*) FILTER (WHERE status='pending'),

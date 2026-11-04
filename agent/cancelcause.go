@@ -25,6 +25,13 @@ func Causef(code, short, format string, args ...any) *AbortCause {
 	return &AbortCause{Code: code, Short: short, Text: fmt.Sprintf(format, args...)}
 }
 
+// AssetAuthorizationChangedCause identifies an immediate Worker stop caused by
+// an operator revoking or deleting one of the intent's task-local assets.
+func AssetAuthorizationChangedCause(assetIDs []int64) *AbortCause {
+	return Causef("asset_authorization_changed", "任务资产授权已变更",
+		"用户撤回或删除了当前意图关联的任务资产（asset_ids=%v）；系统立即停止 Worker，且不会执行后续探测或收尾网络操作", assetIDs)
+}
+
 var (
 	// Task-level execution context.
 	AbortPausedByUser = cause("paused_by_user", "用户暂停了任务",
@@ -35,6 +42,8 @@ var (
 		"任务正在删除（DELETE /api/tasks/{id}），删除屏障已取消该任务正在运行的 Planner、Worker 和主 Agent；本次运行结果不会再被使用")
 	AbortPausedOnReload = cause("paused_on_reload", "后端恢复了任务的暂停状态",
 		"后端启动时根据数据库中持久化的状态恢复了任务暂停。本次运行被取消；正常情况下恢复阶段没有正在运行的 Agent")
+	AbortTaskFinishedByUser = cause("task_finished_by_user", "用户结束了任务",
+		"用户主动结束任务，取消正在运行的 Planner 和 Worker；保留会话、意图及已有产出，不改变目标达成状态")
 	AbortGoalMet = cause("goal_met", "规划者判定任务目标已达成",
 		"规划者判定任务目标已达成并将任务置为 done，随后取消仍在运行的 Worker；这些意图会标记为 stopped，而不是失败")
 	AbortSettleDrainTimeout = cause("settle_drain_timeout", "任务超时收尾的等待时间已用尽",
@@ -45,8 +54,8 @@ var (
 		"规划者调用 kill_work 主动终止了这条意图，通常表示方向跑偏或已无继续价值；意图会标记为 stopped，不会自动重新领取")
 	AbortWorkPausedByUser = cause("work_paused_by_user", "用户暂停了这条 Worker 意图",
 		"用户暂停了正在运行的 Worker。本次调用被取消，意图转为 paused；已经登记的意图、事实、漏洞和活动记录全部保留，恢复后从头重新执行")
-	AbortWorkCancelledByUser = cause("work_cancelled_by_user", "用户删除了这条 Worker 意图",
-		"用户删除了正在运行的 Worker。本次调用被取消；Worker 退出写入区后，服务端按用户选择的删除模式处理该意图——假删除仅标记为已删除并保留全部产出，真删除会级联移除该意图及仅由它支撑的下游节点")
+	AbortWorkCancelledByUser = cause("work_cancelled_by_user", "用户取消了这条 Worker 意图",
+		"用户通过页面或主 Agent 对话取消了正在运行的 Worker。本次调用被取消；Worker 退出写入区后，意图标记为 stopped 并记录取消原因，保留意图及已有产出，仅用户手动重新开启后可执行")
 	AbortWorkFinished = cause("work_finished", "Worker 已正常结束并释放 context",
 		"Worker 已正常结束，引擎在 detachWork 中释放其 context 资源。这不是运行中断；若它出现在中断消息中，说明取消与收场事件发生了竞态")
 	AbortPausedRaceGuard = cause("paused_race_guard", "任务暂停期间拒绝启动新运行",

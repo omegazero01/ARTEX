@@ -17,9 +17,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/guard"
 )
 
 // 本文件实现自定义工具执行器(docs/自定义工具设计.md)。system=false 的 tools 行按
@@ -35,9 +37,13 @@ type customToolReq struct {
 	Schema      json.RawMessage `json:"schema"`
 	Agents      []string        `json:"agents"`
 	Enabled     bool            `json:"enabled"`
-	Kind        string          `json:"kind"` // command | script | http
+	Kind        string          `json:"kind"` // shell | command | script | http
 	Exec        json.RawMessage `json:"exec"`
 	Deferred    bool            `json:"deferred"`
+	Executable  string          `json:"executable"`
+	Directory   string          `json:"directory"`
+	UsageHelp   string          `json:"usage_help"`
+	WhenToUse   string          `json:"when_to_use"`
 }
 
 var reToolKey = reAgentKey // 同 agent key 规则:小写字母开头 + 小写字母/数字/下划线
@@ -61,6 +67,10 @@ func (s *Server) pgCreateCustomTool(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "kind 需为 command / script / http / shell")
 		return
 	}
+	if err := (&db.Tool{Key: req.Key, Kind: req.Kind, Executable: req.Executable}).ValidateShellCommand(); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
 	if req.Kind == "http" && !hasSchemaProps(req.Schema) {
 		writeErr(w, 400, "http 工具必须提供参数 JSON Schema(不能留空)")
 		return
@@ -72,6 +82,7 @@ func (s *Server) pgCreateCustomTool(w http.ResponseWriter, r *http.Request) {
 	if err := pg.CreateCustomTool(&db.Tool{
 		Key: req.Key, Description: req.Description, Schema: req.Schema, Agents: req.Agents,
 		Enabled: req.Enabled, Kind: req.Kind, Exec: req.Exec, Deferred: req.Deferred,
+		Executable: req.Executable, Directory: req.Directory, UsageHelp: req.UsageHelp, WhenToUse: req.WhenToUse,
 	}); err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -103,6 +114,10 @@ func (s *Server) pgUpdateCustomTool(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "kind 需为 command / script / http / shell")
 		return
 	}
+	if err := (&db.Tool{Key: key, Kind: req.Kind, Executable: req.Executable}).ValidateShellCommand(); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
 	if req.Kind == "http" && !hasSchemaProps(req.Schema) {
 		writeErr(w, 400, "http 工具必须提供参数 JSON Schema(不能留空)")
 		return
@@ -110,6 +125,7 @@ func (s *Server) pgUpdateCustomTool(w http.ResponseWriter, r *http.Request) {
 	if err := pg.UpdateCustomTool(&db.Tool{
 		Key: key, Description: req.Description, Schema: req.Schema, Agents: req.Agents,
 		Enabled: req.Enabled, Kind: req.Kind, Exec: req.Exec, Deferred: req.Deferred,
+		Executable: req.Executable, Directory: req.Directory, UsageHelp: req.UsageHelp, WhenToUse: req.WhenToUse,
 	}); err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -135,9 +151,14 @@ func (s *Server) pgDeleteCustomTool(w http.ResponseWriter, r *http.Request) {
 // real tool call — it runs arbitrary command/script/http on the server, which the
 // custom-tool feature already allows, so no new capability is granted.
 type testToolReq struct {
-	Kind   string          `json:"kind"` // command | script | http
-	Exec   json.RawMessage `json:"exec"`
-	Params map[string]any  `json:"params"`
+	Key        string          `json:"key"`
+	Executable string          `json:"executable"`
+	Directory  string          `json:"directory"`
+	Action     string          `json:"action"`
+	Command    string          `json:"command"`
+	Kind       string          `json:"kind"` // command | script | http
+	Exec       json.RawMessage `json:"exec"`
+	Params     map[string]any  `json:"params"`
 }
 
 // pgTestCustomTool executes an exec spec once and returns its raw output + error
@@ -151,6 +172,10 @@ func (s *Server) pgTestCustomTool(w http.ResponseWriter, r *http.Request) {
 	var req testToolReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, "无效的请求体")
+		return
+	}
+	if req.Kind == "shell" {
+		s.testShellTool(w, r, req)
 		return
 	}
 	params := req.Params
@@ -268,7 +293,9 @@ func (s *Server) buildCustomTool(t *db.Tool) actool.CoreTool {
 	run := func(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
 		var params map[string]any
 		if len(in) > 0 {
-			_ = json.Unmarshal(in, &params)
+			if err := json.Unmarshal(in, &params); err != nil {
+				return actool.Errorf("参数格式错误: " + err.Error()), nil
+			}
 		}
 		if params == nil {
 			params = map[string]any{}
@@ -334,7 +361,10 @@ func (s *Server) runCommandTool(ctx context.Context, execRaw json.RawMessage, pa
 	if strings.TrimSpace(spec.Command) == "" {
 		return actool.Errorf("command 为空"), nil
 	}
-	cmd := renderTemplate(spec.Command, params, shellQuote)
+	cmd := renderCommandTemplate(spec.Command, params, defaultShellMode())
+	if reason := s.customToolAssetPolicy(ctx, "custom_command", map[string]any{"command": cmd, "params": params}); reason != "" {
+		return actool.Errorf(reason), nil
+	}
 	// 复用 Bash 也在用的底层 run(经 Bash CoreTool.Call):自动继承安全 floor/超时/
 	// 代理 env/输出溢出。工具与 Bash 平级、共用底层,不经过 Bash 这个工具让模型调。
 	bashIn, _ := json.Marshal(map[string]any{"command": cmd})
@@ -353,6 +383,9 @@ func (s *Server) runScriptTool(ctx context.Context, key string, execRaw json.Raw
 	_ = json.Unmarshal(execRaw, &spec)
 	if strings.TrimSpace(spec.Code) == "" {
 		return actool.Errorf("script code 为空"), nil
+	}
+	if reason := s.customToolAssetPolicy(ctx, key, map[string]any{"code": spec.Code, "params": params}); reason != "" {
+		return actool.Errorf(reason), nil
 	}
 	interp := s.pythonInterpreter()
 	if interp == "" {
@@ -428,6 +461,9 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 	if strings.TrimSpace(rawURL) == "" {
 		return actool.Errorf("http url 为空"), nil
 	}
+	if reason := s.customToolAssetPolicy(ctx, "custom_http", map[string]any{"url": rawURL, "params": params}); reason != "" {
+		return actool.Errorf(reason), nil
+	}
 	var bodyReader io.Reader
 	if spec.Body != "" {
 		bodyReader = strings.NewReader(renderTemplate(spec.Body, params, identity))
@@ -441,8 +477,16 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 	for k, v := range spec.Headers {
 		req.Header.Set(k, renderTemplate(v, params, identity))
 	}
-	client := &http.Client{Timeout: timeoutOr(spec.TimeoutMs, 30000)}
-	if tr := s.httpProxyTransport(spec); tr != nil {
+	client := &http.Client{
+		Timeout: timeoutOr(spec.TimeoutMs, 30000),
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if reason := s.customToolAssetPolicy(ctx, "custom_http", map[string]any{"url": req.URL.String()}); reason != "" {
+				return fmt.Errorf("%s", reason)
+			}
+			return nil
+		},
+	}
+	if tr := s.httpProxyTransport(ctx, spec); tr != nil {
 		client.Transport = tr
 	}
 	resp, err := client.Do(req)
@@ -456,14 +500,44 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 	return actool.Text(actool.Capture(tc, string(b))), nil
 }
 
+// customToolAssetPolicy evaluates the fully rendered execution spec. The outer
+// Agent hook only sees model-supplied parameters, so a fixed host embedded in a
+// custom command/script/HTTP template must be checked again here before any
+// process starts or request is sent.
+func (s *Server) customToolAssetPolicy(ctx context.Context, toolName string, value any) string {
+	runInfo := agent.RunInfoFrom(ctx)
+	if runInfo.TaskID <= 0 || s == nil || s.m == nil || s.m.assets == nil {
+		return ""
+	}
+	input, err := json.Marshal(value)
+	if err != nil {
+		return "任务资产执行被阻止：无法解析自定义工具目标"
+	}
+	var taskGuard *guard.Guard
+	if task, ok := s.m.Task(fmt.Sprint(runInfo.TaskID)); ok {
+		taskGuard = task.Guard
+	}
+	hooks := guard.AssetPolicyHooksWithGuard(taskGuard, s.m.assets, runInfo.TaskID)
+	blocked, reason, _ := hooks.PreToolUse(ctx, toolName, input)
+	if blocked {
+		return reason
+	}
+	return ""
+}
+
 // httpProxyTransport builds a Transport for the http tool's proxy config, or nil
 // (direct). use_recording_proxy routes through the recording proxy + trusts its CA.
-func (s *Server) httpProxyTransport(spec httpExec) *http.Transport {
+func (s *Server) httpProxyTransport(ctx context.Context, spec httpExec) *http.Transport {
 	proxyStr := strings.TrimSpace(spec.Proxy)
 	var caFile string
 	if spec.UseRecordingProxy {
-		if addr := s.m.ProxyAddr(); addr != "" {
-			proxyStr = "http://" + addr
+		runInfo := agent.RunInfoFrom(ctx)
+		if runInfo.TaskID > 0 {
+			proxyStr = s.m.TaskProxyAddr()
+			caFile = s.m.TaskProxyCACert()
+			proxyStr = agent.TaskProxyAddr(proxyStr, caFile, runInfo.TaskID)
+		} else if addr := s.m.ProxyAddr(); addr != "" {
+			proxyStr = addr
 			caFile = s.m.ProxyCACert()
 		}
 	}
@@ -492,6 +566,17 @@ func identity(s string) string { return s }
 
 // shellQuote single-quotes a value for safe shell interpolation.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+func shellQuoteFor(mode, value string) string {
+	if mode == "powershell" {
+		return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+	}
+	return shellQuote(value)
+}
+
+func renderCommandTemplate(tmpl string, params map[string]any, mode string) string {
+	return renderTemplate(tmpl, params, func(value string) string { return shellQuoteFor(mode, value) })
+}
 
 // renderTemplate replaces {name} placeholders with each param's rendered value.
 func renderTemplate(tmpl string, params map[string]any, quote func(string) string) string {

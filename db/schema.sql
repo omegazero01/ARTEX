@@ -1,4 +1,4 @@
--- ARTEX PostgreSQL schema (单一数据源)
+-- SERIES PostgreSQL schema (单一数据源)
 -- 幂等：可重复执行（IF NOT EXISTS / OR REPLACE / DROP TRIGGER IF EXISTS）。
 
 -- =====================================================================
@@ -14,9 +14,16 @@ $$ LANGUAGE plpgsql;
 -- 不用 pg_input_is_valid 是因为那要 PG16+，这里要兼容更老的存量库。
 CREATE OR REPLACE FUNCTION try_inet(value text) RETURNS inet AS $$
 BEGIN
-    RETURN value::inet;
-EXCEPTION WHEN others THEN
-    RETURN NULL;
+    -- Ordinary DNS names are not inet candidates. Avoid opening/rolling back a
+    -- PL/pgSQL exception subtransaction for every domain in authorization scans.
+    IF strpos(value, ':')=0 AND value !~ '^[[:space:]0-9./]+$' THEN
+        RETURN NULL;
+    END IF;
+    BEGIN
+        RETURN value::inet;
+    EXCEPTION WHEN others THEN
+        RETURN NULL;
+    END;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE STRICT;
 
@@ -143,8 +150,10 @@ ALTER TABLE company_scope ADD CONSTRAINT ck_company_scope_payload CHECK (
 );
 CREATE INDEX IF NOT EXISTS idx_sv2_domain  ON company_scope(domain)   WHERE kind = 'domain';
 CREATE INDEX IF NOT EXISTS idx_sv2_net     ON company_scope USING GIST(net inet_ops) WHERE kind IN ('ip','cidr');
-CREATE UNIQUE INDEX IF NOT EXISTS uq_sv2_value ON company_scope(company_id, kind, value) WHERE kind IN ('icp','keyword');
-CREATE INDEX IF NOT EXISTS idx_sv2_icp ON company_scope(value) WHERE kind = 'icp';
+DROP INDEX IF EXISTS uq_sv2_value;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sv3_value ON company_scope(company_id, kind, md5(value)) WHERE kind IN ('icp','keyword');
+DROP INDEX IF EXISTS idx_sv2_icp;
+CREATE INDEX IF NOT EXISTS idx_sv3_icp ON company_scope(md5(value)) WHERE kind = 'icp';
 CREATE INDEX IF NOT EXISTS idx_sv2_company ON company_scope(company_id);
 
 -- =====================================================================
@@ -177,14 +186,13 @@ CREATE TABLE IF NOT EXISTS exploration_nodes (
     origin         TEXT,
     owner          TEXT,
     blocked_reason TEXT,
-    delete_reason  TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at   TIMESTAMPTZ,
     CONSTRAINT ck_node_kind CHECK (kind IN ('begin','goal','intent','fact','finding','hint','digest')),
     CONSTRAINT ck_node_state CHECK (
         (kind='begin'   AND state IN ('open')) OR
-        (kind='intent'  AND state IN ('open','running','paused','done','blocked','exhausted','stopped','deleted')) OR
+        (kind='intent'  AND state IN ('open','running','paused','done','blocked','exhausted','stopped')) OR
         (kind='goal'    AND state IN ('open','met','abandoned')) OR
         (kind='fact'    AND state IN ('confirmed','dismissed','origin')) OR
         (kind='finding' AND state IN ('confirmed','dismissed')) OR
@@ -193,8 +201,6 @@ CREATE TABLE IF NOT EXISTS exploration_nodes (
     )
 );
 ALTER TABLE exploration_nodes ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
--- 意图假删除(soft delete):state='deleted' 时,delete_reason 记用户填写的删除原因。
-ALTER TABLE exploration_nodes ADD COLUMN IF NOT EXISTS delete_reason TEXT;
 -- cold-digest (§2.3/§5.3): content_version bumps on any change that could alter a
 -- digest body (summary/state/confidence); cold_since_round stamps the planner round
 -- a node most recently went from "has a live downstream branch" to none (NULL = hot).
@@ -214,8 +220,7 @@ BEGIN
             CHECK (kind IN ('begin','goal','intent','fact','finding','hint','digest'));
     END IF;
 END $$;
--- ck_node_state: recreate when it lacks the 'paused' (older), 'superseded' (digest rev),
--- or 'deleted' (intent soft-delete rev) branches.
+-- ck_node_state: recreate when it lacks the 'paused' (older) or 'digest' (this rev) branches.
 DO $$
 BEGIN
     IF EXISTS (
@@ -223,13 +228,12 @@ BEGIN
         WHERE conrelid='exploration_nodes'::regclass
           AND conname='ck_node_state'
           AND (pg_get_constraintdef(oid) NOT LIKE '%paused%'
-               OR pg_get_constraintdef(oid) NOT LIKE '%superseded%'
-               OR pg_get_constraintdef(oid) NOT LIKE '%deleted%')
+               OR pg_get_constraintdef(oid) NOT LIKE '%superseded%')
     ) THEN
         ALTER TABLE exploration_nodes DROP CONSTRAINT ck_node_state;
         ALTER TABLE exploration_nodes ADD CONSTRAINT ck_node_state CHECK (
             (kind='begin'   AND state IN ('open')) OR
-            (kind='intent'  AND state IN ('open','running','paused','done','blocked','exhausted','stopped','deleted')) OR
+            (kind='intent'  AND state IN ('open','running','paused','done','blocked','exhausted','stopped')) OR
             (kind='goal'    AND state IN ('open','met','abandoned')) OR
             (kind='fact'    AND state IN ('confirmed','dismissed','origin')) OR
             (kind='finding' AND state IN ('confirmed','dismissed')) OR
@@ -337,6 +341,11 @@ CREATE INDEX IF NOT EXISTS idx_act_result_usage ON activity(exploration_id)
     INCLUDE (input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
     WHERE kind='result';
 CREATE INDEX IF NOT EXISTS idx_act_latest ON activity(exploration_id, created_at DESC);
+-- Tool final-output lookup: result first, latest text as fallback, without a
+-- prefix scan or sorting an entire long-running worker stream.
+CREATE INDEX IF NOT EXISTS idx_act_worker_output ON activity
+    (node_id, (CASE WHEN kind='result' THEN 0 ELSE 1 END), id DESC)
+    WHERE kind IN ('result','text');
 
 -- main_sessions records the resettable main-agent conversation segments of a task.
 -- Segment 0 (the original session) is implicit and never stored; this table holds
@@ -527,6 +536,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     pinned_at      TIMESTAMPTZ,
     first_run_at   TIMESTAMPTZ,
     deadline_at    TIMESTAMPTZ,
+    paused_at      TIMESTAMPTZ,
     archived_at    TIMESTAMPTZ,
     deleted_at     TIMESTAMPTZ,
     completed_at   TIMESTAMPTZ,
@@ -534,6 +544,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_alive  ON tasks(created_at DESC) WHERE deleted_at IS NULL;
+-- 暂停计时：暂停时刻落库，恢复准入时把 deadline_at 顺延暂停时长（任务级超时不烧暂停时间）。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)          WHERE deleted_at IS NULL;
 DROP TRIGGER IF EXISTS trg_tasks_upd ON tasks;
 CREATE TRIGGER trg_tasks_upd BEFORE UPDATE ON tasks
@@ -616,16 +628,9 @@ CREATE TABLE IF NOT EXISTS task_templates (
     nkey        TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL,
     goal        TEXT NOT NULL,
-    -- 预设的任务分类；分类删除时置空（与 tasks.category_id 一致，不阻断）。
-    category_id     BIGINT REFERENCES task_categories(id) ON DELETE SET NULL,
-    -- 预设的任务级拦截/允许规则快照(AssetInterceptRuleInput 数组)；应用模板时灌进新任务。
-    intercept_rules JSONB NOT NULL DEFAULT '[]',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- 补旧库(已发版,加列带 IF NOT EXISTS)。
-ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS category_id BIGINT REFERENCES task_categories(id) ON DELETE SET NULL;
-ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS intercept_rules JSONB NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_task_templates_updated ON task_templates(updated_at DESC, id DESC);
 DROP TRIGGER IF EXISTS trg_task_templates_upd ON task_templates;
 CREATE TRIGGER trg_task_templates_upd BEFORE UPDATE ON task_templates
@@ -651,13 +656,245 @@ CREATE TABLE IF NOT EXISTS task_asset_links (
     source         TEXT NOT NULL DEFAULT 'system',
     source_summary TEXT NOT NULL DEFAULT '',
     source_node_id BIGINT REFERENCES exploration_nodes(id) ON DELETE SET NULL,
+    tested         BOOLEAN NOT NULL DEFAULT false,
+    tested_at      TIMESTAMPTZ,
+    tested_by      TEXT,
+    approval_state TEXT NOT NULL DEFAULT 'approved',
+    approved_at    TIMESTAMPTZ,
+    approved_by    TEXT,
+    approval_reason TEXT NOT NULL DEFAULT '',
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (task_id, asset_id)
 );
+ALTER TABLE task_asset_links ADD COLUMN IF NOT EXISTS source_origin JSONB;
+ALTER TABLE task_asset_links ADD COLUMN IF NOT EXISTS tested BOOLEAN;
+UPDATE task_asset_links SET tested=false WHERE tested IS NULL;
+ALTER TABLE task_asset_links ALTER COLUMN tested SET DEFAULT false;
+ALTER TABLE task_asset_links ALTER COLUMN tested SET NOT NULL;
+ALTER TABLE task_asset_links ADD COLUMN IF NOT EXISTS tested_at TIMESTAMPTZ;
+ALTER TABLE task_asset_links ADD COLUMN IF NOT EXISTS tested_by TEXT;
+ALTER TABLE task_asset_links ADD COLUMN IF NOT EXISTS approval_state TEXT;
+UPDATE task_asset_links SET approval_state='approved' WHERE approval_state IS NULL OR approval_state='';
+ALTER TABLE task_asset_links ALTER COLUMN approval_state SET DEFAULT 'approved';
+ALTER TABLE task_asset_links ALTER COLUMN approval_state SET NOT NULL;
+ALTER TABLE task_asset_links DROP CONSTRAINT IF EXISTS task_asset_links_approval_state_check;
+ALTER TABLE task_asset_links ADD CONSTRAINT task_asset_links_approval_state_check CHECK (approval_state IN ('approved','pending','revoked','blocked'));
+ALTER TABLE task_asset_links ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+ALTER TABLE task_asset_links ADD COLUMN IF NOT EXISTS approved_by TEXT;
+ALTER TABLE task_asset_links ADD COLUMN IF NOT EXISTS approval_reason TEXT;
+UPDATE task_asset_links SET approval_reason='' WHERE approval_reason IS NULL;
+ALTER TABLE task_asset_links ALTER COLUMN approval_reason SET DEFAULT '';
+ALTER TABLE task_asset_links ALTER COLUMN approval_reason SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_task_asset_links_asset ON task_asset_links(asset_id, task_id);
+CREATE INDEX IF NOT EXISTS idx_task_asset_links_tested ON task_asset_links(task_id, tested, asset_id);
 CREATE INDEX IF NOT EXISTS idx_task_asset_links_node ON task_asset_links(source_node_id)
     WHERE source_node_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_task_asset_links_approval ON task_asset_links(task_id, approval_state, asset_id);
+
+-- Task-local deletion tombstones. These intentionally have no asset foreign key:
+-- a globally shared asset may be deleted/recreated while the current task must
+-- continue to reject the same normalized identity until an operator reattaches it.
+CREATE TABLE IF NOT EXISTS task_asset_blocks (
+    task_id    BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    asset_key  TEXT NOT NULL,
+    asset_type TEXT NOT NULL,
+    host_key   TEXT NOT NULL DEFAULT '',
+    asset_id   BIGINT,
+    reason     TEXT NOT NULL DEFAULT '',
+    blocked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    blocked_by TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (task_id, asset_key)
+);
+ALTER TABLE task_asset_blocks ADD COLUMN IF NOT EXISTS block_kind TEXT NOT NULL DEFAULT 'deleted'
+    CHECK (block_kind IN ('manual','deleted'));
+CREATE INDEX IF NOT EXISTS idx_task_asset_blocks_host ON task_asset_blocks(task_id, host_key);
+CREATE INDEX IF NOT EXISTS idx_task_asset_blocks_asset ON task_asset_blocks(asset_id);
+
+-- Match Go's task-local host identity, including URL-only imported records and
+-- canonical IPv6. CIDR and other free-form scope text are not coerced to hosts.
+CREATE OR REPLACE FUNCTION task_asset_normalized_host(value TEXT)
+RETURNS TEXT AS $$
+DECLARE
+    normalized TEXT := lower(btrim(COALESCE(value,'')));
+    parsed INET;
+BEGIN
+    IF normalized ~ '^[a-z][a-z0-9+.-]*://' THEN
+        normalized := regexp_replace(normalized, '^[a-z][a-z0-9+.-]*://', '');
+        normalized := split_part(split_part(split_part(normalized, '/', 1), '?', 1), '#', 1);
+        normalized := regexp_replace(normalized, '^.*@', '');
+        IF left(normalized,1)='[' THEN
+            normalized := split_part(substr(normalized,2), ']', 1);
+        ELSE
+            normalized := regexp_replace(normalized, ':[0-9]+$', '');
+        END IF;
+    END IF;
+    normalized := btrim(normalized, '[]');
+    parsed := try_inet(normalized);
+    IF parsed IS NOT NULL AND position('/' IN normalized)=0 THEN
+        RETURN host(parsed);
+    END IF;
+    RETURN regexp_replace(normalized, '\.$', '');
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Identity normalization depends only on asset fields, not task authorization.
+-- Compute it on writes so task-wide reads don't normalize every parent for
+-- every endpoint. Generated storage also stays correct for imports and SQL writes.
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS authorization_host TEXT GENERATED ALWAYS AS (
+    task_asset_normalized_host(COALESCE(NULLIF(btrim(domain),''),
+    NULLIF(btrim(ip),''), CASE WHEN url ~ '^[a-zA-Z][a-zA-Z0-9+.-]*://' THEN url END,''))
+) STORED;
+
+CREATE OR REPLACE FUNCTION task_asset_host(asset assets)
+RETURNS TEXT AS $$
+SELECT asset.authorization_host;
+$$ LANGUAGE SQL IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION task_asset_host_within(child_host TEXT, parent_host TEXT)
+RETURNS BOOLEAN AS $$
+WITH normalized AS (
+    SELECT task_asset_normalized_host(child_host) AS child,
+           task_asset_normalized_host(parent_host) AS parent
+)
+SELECT child<>'' AND parent<>'' AND
+    (child=parent OR (try_inet(parent) IS NULL AND right(child,length(parent)+1)='.'||parent))
+FROM normalized;
+$$ LANGUAGE SQL IMMUTABLE;
+
+-- URLs are normalized on insertion; paths, parameters and their case stay part
+-- of the identity. Host-based tombstones additionally constrain derived rows.
+CREATE OR REPLACE FUNCTION task_asset_identity_key(asset assets)
+RETURNS TEXT AS $$
+SELECT CASE asset.type
+    WHEN 'root_domain' THEN 'root_domain:'||task_asset_normalized_host(asset.domain)
+    WHEN 'subdomain' THEN 'subdomain:'||task_asset_normalized_host(asset.domain)
+    WHEN 'ip' THEN 'ip:'||task_asset_normalized_host(asset.ip)
+    WHEN 'service' THEN CASE WHEN COALESCE(asset.url,'')<>'' THEN 'service:'||asset.url
+        ELSE 'service:'||task_asset_host(asset)||':'||COALESCE(asset.port,0)::text||':'||lower(btrim(COALESCE(asset.service_name,''))) END
+    WHEN 'endpoint' THEN 'endpoint:'||COALESCE(asset.url,'')||':'||upper(btrim(COALESCE(asset.method,'')))
+    WHEN 'app' THEN 'app:'||lower(btrim(COALESCE(NULLIF(asset.bundle_id,''),asset.app_name,'')))
+    ELSE asset.type||':'||asset.id::text END;
+$$ LANGUAGE SQL IMMUTABLE;
+
+-- Authorization is per host: a tombstone matches only its exact host, never a
+-- subdomain of it. Blocking, revoking or deleting a domain is therefore a
+-- standalone decision about that host.
+CREATE OR REPLACE FUNCTION task_asset_blocked(p_task_id BIGINT, p_asset_id BIGINT)
+RETURNS BOOLEAN AS $$
+BEGIN
+IF NOT EXISTS (SELECT 1 FROM task_asset_blocks WHERE task_id=p_task_id) THEN
+    RETURN false;
+END IF;
+RETURN EXISTS (
+    SELECT 1 FROM task_asset_blocks block JOIN assets t ON t.id=p_asset_id
+    WHERE block.task_id=p_task_id
+      AND (block.asset_type IN ('root_domain','subdomain','ip') OR block.block_kind='invalid')
+      AND (block.asset_id=p_asset_id
+           OR block.asset_key=task_asset_identity_key(t)
+           OR (block.asset_type IN ('root_domain','subdomain','ip') AND block.host_key<>''
+               AND task_asset_host(t)=block.host_key))
+);
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- Authorization is per host: only assets on the target's exact host influence
+-- it (same-host DNS siblings and the service/endpoint on that host inherit the
+-- host decision). A parent domain's approval, revocation, block or deletion
+-- never changes a different-host subdomain. Synthetic pending ancestors do not
+-- override the host decision.
+CREATE OR REPLACE FUNCTION task_asset_owner_approval_state(p_task_id BIGINT,p_asset_id BIGINT)
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+ target_host TEXT; target_type TEXT; target_state TEXT;
+ parent_count BIGINT; denied BOOLEAN; revoked BOOLEAN;
+ exact_pending BOOLEAN; exact_approved BOOLEAN; pending BOOLEAN;
+BEGIN
+ IF task_asset_blocked(p_task_id,p_asset_id) THEN RETURN 'blocked'; END IF;
+ SELECT task_asset_host(a),a.type,l.approval_state INTO target_host,target_type,target_state
+ FROM assets a JOIN task_asset_links l ON l.asset_id=a.id
+ WHERE a.id=p_asset_id AND l.task_id=p_task_id;
+ IF NOT FOUND THEN RETURN 'revoked'; END IF;
+ IF target_type NOT IN ('root_domain','subdomain','ip','service','endpoint') THEN RETURN 'approved'; END IF;
+ -- Hosts are normalized on asset writes; only same-host assets share
+ -- authorization. Keep normalized parent reads together.
+ WITH parents AS MATERIALIZED (
+  SELECT p.id,task_asset_host(p) AS host,l.approval_state
+  FROM task_asset_links l JOIN assets p ON p.id=l.asset_id
+  WHERE l.task_id=p_task_id AND p.type IN ('root_domain','subdomain','ip')
+ ), matching AS MATERIALIZED (
+  SELECT * FROM parents WHERE host<>'' AND target_host<>'' AND host=target_host
+ )
+ SELECT count(*),bool_or(approval_state='blocked' OR task_asset_blocked(p_task_id,id)),
+  bool_or(approval_state='revoked'),bool_or(host=target_host AND approval_state='pending'),
+  bool_or(host=target_host AND approval_state='approved'),bool_or(approval_state='pending')
+ INTO parent_count,denied,revoked,exact_pending,exact_approved,pending FROM matching;
+ IF denied THEN RETURN 'blocked'; END IF;
+ IF revoked THEN RETURN 'revoked'; END IF;
+ IF target_state IN ('revoked','blocked') AND target_type IN ('root_domain','subdomain','ip') THEN RETURN target_state; END IF;
+ IF task_host_template_allows(p_task_id,target_host) THEN RETURN 'approved'; END IF;
+ IF exact_pending THEN RETURN 'pending'; END IF;
+ IF target_type NOT IN ('service','endpoint') THEN RETURN target_state; END IF;
+ IF exact_approved THEN RETURN 'approved'; END IF;
+ IF parent_count=0 OR pending THEN RETURN 'pending'; END IF;
+ RETURN 'approved';
+END
+$$;
+
+-- A local association overrides all inherited sources; otherwise any directly
+-- related source may supply authorization. Current-task tombstones always win.
+CREATE OR REPLACE FUNCTION task_asset_effective_approval_state(p_task_id BIGINT, p_asset_id BIGINT)
+RETURNS TEXT AS $$
+DECLARE result TEXT;
+BEGIN
+    IF EXISTS (SELECT 1 FROM task_asset_links WHERE task_id=p_task_id AND asset_id=p_asset_id) THEN
+        -- The owner check already enforces this task's tombstones.
+        RETURN task_asset_owner_approval_state(p_task_id,p_asset_id);
+    END IF;
+    IF task_asset_blocked(p_task_id,p_asset_id) THEN RETURN 'blocked'; END IF;
+    WITH candidate_states AS MATERIALIZED (
+        SELECT task_asset_owner_approval_state(relation.source_task_id,p_asset_id) AS state
+        FROM task_relations relation
+        JOIN task_asset_links own ON own.task_id=relation.source_task_id AND own.asset_id=p_asset_id
+        WHERE relation.task_id=p_task_id
+    )
+    SELECT state INTO result FROM candidate_states
+    ORDER BY CASE state WHEN 'approved' THEN 0 WHEN 'pending' THEN 1 WHEN 'revoked' THEN 2 ELSE 3 END
+    LIMIT 1;
+    RETURN COALESCE(result,'revoked');
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION task_asset_effectively_approved(p_task_id BIGINT, p_asset_id BIGINT)
+RETURNS BOOLEAN AS $$
+SELECT task_asset_effective_approval_state(p_task_id,p_asset_id)='approved';
+$$ LANGUAGE SQL STABLE;
+
+-- Shared by startup and archive restore. Save historic operator revocations
+-- before neutralizing child decisions. Unknown revocations are conservatively
+-- retained, while repeated runs cannot recreate a tombstone after reattachment.
+CREATE OR REPLACE FUNCTION normalize_derived_task_asset_approvals(p_task_id BIGINT DEFAULT NULL)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO task_asset_blocks(task_id,asset_key,asset_type,host_key,asset_id,reason,blocked_at,blocked_by)
+    SELECT l.task_id,task_asset_identity_key(a),a.type,task_asset_host(a),a.id,
+           COALESCE(NULLIF(l.approval_reason,''),'历史服务/接口撤回授权'),
+           l.updated_at,COALESCE(l.approved_by,'')
+    FROM task_asset_links l JOIN assets a ON a.id=l.asset_id
+    WHERE a.type IN ('service','endpoint') AND l.approval_state='revoked'
+      AND COALESCE(l.approval_reason,'')<>'继承父资产撤回' AND COALESCE(l.approved_by,'')<>'inherited'
+      AND (p_task_id IS NULL OR l.task_id=p_task_id)
+    ON CONFLICT (task_id,asset_key) DO NOTHING;
+
+    UPDATE task_asset_links l SET approval_state='approved',approved_at=NULL,approved_by=NULL,
+        approval_reason='继承父资产授权'
+    FROM assets a WHERE a.id=l.asset_id AND a.type IN ('service','endpoint')
+      AND (p_task_id IS NULL OR l.task_id=p_task_id)
+      AND (l.approval_state<>'approved' OR l.approved_at IS NOT NULL OR l.approved_by IS NOT NULL
+           OR COALESCE(l.approval_reason,'')<>'继承父资产授权');
+END;
+$$ LANGUAGE plpgsql;
+
 DROP TRIGGER IF EXISTS trg_task_asset_links_upd ON task_asset_links;
 CREATE TRIGGER trg_task_asset_links_upd BEFORE UPDATE ON task_asset_links
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -665,9 +902,22 @@ CREATE TRIGGER trg_task_asset_links_upd BEFORE UPDATE ON task_asset_links
 -- Keep provenance rows synchronized when existing asset upsert paths append or
 -- remove task ids. Detailed callers overwrite the generic source after upsert.
 CREATE OR REPLACE FUNCTION sync_task_asset_links() RETURNS trigger AS $$
+DECLARE
+    agent_discovery boolean := COALESCE(current_setting('series.agent_discovery', true), '') = 'on';
+    user_registration boolean := COALESCE(current_setting('series.user_asset_registration', true), '') = 'on';
 BEGIN
-    INSERT INTO task_asset_links(task_id, asset_id, source, source_summary)
-    SELECT task.id, NEW.id, 'system', '任务执行期间自动关联'
+    INSERT INTO task_asset_links(
+        task_id, asset_id, source, source_summary, approval_state, approval_reason, source_origin
+    )
+    SELECT task.id,
+           NEW.id,
+           CASE WHEN agent_discovery THEN 'agent' ELSE 'system' END,
+           CASE WHEN agent_discovery THEN 'Agent 通过 insert_assets 登记' ELSE '任务执行期间自动关联' END,
+           CASE WHEN (agent_discovery OR user_registration) AND NEW.type NOT IN ('service','endpoint') THEN 'pending' ELSE 'approved' END,
+           CASE WHEN NEW.type IN ('service','endpoint') THEN '继承父资产授权'
+                WHEN agent_discovery THEN 'Agent 发现，等待用户审批' ELSE '' END,
+           CASE WHEN agent_discovery AND task.id::text = current_setting('series.origin_task',true)
+                THEN NULLIF(current_setting('series.asset_origin',true),'')::jsonb ELSE NULL END
     FROM unnest(NEW.task_ids) AS requested(task_id)
     JOIN tasks task ON task.id=requested.task_id AND task.deleted_at IS NULL
     ON CONFLICT (task_id, asset_id) DO NOTHING;
@@ -690,6 +940,37 @@ FROM assets asset
 CROSS JOIN LATERAL unnest(asset.task_ids) AS requested(task_id)
 JOIN tasks task ON task.id=requested.task_id AND task.deleted_at IS NULL
 ON CONFLICT (task_id, asset_id) DO NOTHING;
+
+-- New approval fields are conservative for legacy associations: existing links
+-- were explicitly usable before approval was introduced.
+UPDATE task_asset_links SET approval_state='approved'
+WHERE approval_state IS NULL OR approval_state='';
+
+SELECT normalize_derived_task_asset_approvals();
+
+-- Backfill the task-local tested flag for existing installations. Facts and
+-- findings already anchored to an asset are durable evidence that an agent
+-- tested it; later writes maintain the flag directly from the write tools.
+WITH first_test AS (
+    SELECT task.id AS task_id, anchor.asset_id,
+           MIN(node.created_at) AS tested_at,
+           (ARRAY_AGG(NULLIF(node.origin,'') ORDER BY node.created_at, node.id)
+             FILTER (WHERE NULLIF(node.origin,'') IS NOT NULL))[1] AS tested_by
+    FROM tasks task
+    JOIN exploration_nodes node ON node.exploration_id=task.exploration_id
+                               AND node.kind IN ('fact','finding')
+                               AND node.state <> 'origin'
+    JOIN exploration_anchors anchor ON anchor.node_id=node.id
+    GROUP BY task.id, anchor.asset_id
+)
+UPDATE task_asset_links link
+SET tested=true,
+    tested_at=COALESCE(link.tested_at, first_test.tested_at),
+    tested_by=COALESCE(NULLIF(link.tested_by,''), first_test.tested_by)
+FROM first_test
+WHERE link.task_id=first_test.task_id
+  AND link.asset_id=first_test.asset_id
+  AND NOT link.tested;
 
 -- Ordered task-level LLM failover chain. A quota-exhausted entry is skipped
 -- until the user saves/resets the chain, which clears all failure state.
@@ -754,8 +1035,9 @@ ALTER TABLE task_scope ADD CONSTRAINT task_scope_kind_check
     CHECK (kind IN ('company','root_domain','subdomain','ip','cidr','icp','keyword'));
 -- 去重：同一 task 的同一条范围只存一次（自动填批量插入靠它幂等）。
 DROP INDEX IF EXISTS uq_task_scope;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_task_scope_v2 ON task_scope(
-    task_id, kind, COALESCE(domain,''), COALESCE(net::text,''), COALESCE(company_id,0), COALESCE(value,''));
+DROP INDEX IF EXISTS uq_task_scope_v2;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_task_scope_v3 ON task_scope(
+    task_id, kind, COALESCE(domain,''), COALESCE(net::text,''), COALESCE(company_id,0), md5(COALESCE(value,'')));
 CREATE INDEX IF NOT EXISTS idx_ts_domain  ON task_scope(domain) WHERE kind IN ('root_domain','subdomain');
 CREATE INDEX IF NOT EXISTS idx_ts_net     ON task_scope USING GIST(net inet_ops) WHERE kind IN ('ip','cidr');
 CREATE INDEX IF NOT EXISTS idx_ts_company ON task_scope(company_id) WHERE kind = 'company';
@@ -854,13 +1136,6 @@ DROP TRIGGER IF EXISTS trg_mcp_upd ON mcp_servers;
 CREATE TRIGGER trg_mcp_upd BEFORE UPDATE ON mcp_servers
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- 默认数据源占位：ScopeSentry 资产同步 MCP（地址与认证均留空、未启用）。
--- 供「资产同步」页检测数据源是否已配置；用户在页面填入 url 与 X-API-Key 后再启用。
--- 仅在缺失时插入，绝不覆盖用户已配置/已启用的服务器（schema.sql 每次启动都会 Exec）。
-INSERT INTO mcp_servers (name, transport, url, env, enabled)
-VALUES ('ScopeSentry', 'http', NULL, '{"X-API-Key":""}', false)
-ON CONFLICT (name) DO NOTHING;
-
 CREATE TABLE IF NOT EXISTS mcp_tools_cache (
     id            BIGSERIAL PRIMARY KEY,
     server_id     BIGINT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
@@ -929,6 +1204,32 @@ CREATE TABLE IF NOT EXISTS tool_usage (
 CREATE INDEX IF NOT EXISTS idx_tool_usage_tool ON tool_usage(tool_key, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_tool_usage_task ON tool_usage(task_id);
 
+-- Startup backfills are transactional and must not run again after history is
+-- cleared or archived. Kept independently of task/session lifetimes.
+CREATE TABLE IF NOT EXISTS tool_usage_migrations (
+    name TEXT PRIMARY KEY,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- MCP tool calls use a dedicated ledger instead of parsing the dynamic
+-- mcp__server__tool runtime name. No foreign keys by design: task/session or MCP
+-- deletion must not erase historical usage statistics.
+CREATE TABLE IF NOT EXISTS mcp_usage (
+    id             BIGSERIAL PRIMARY KEY,
+    ts             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    server_id      BIGINT,
+    server_name    TEXT NOT NULL,
+    tool_name      TEXT NOT NULL,
+    agent_key      TEXT,
+    task_id        BIGINT,
+    exploration_id BIGINT,
+    intent_id      BIGINT,
+    session_id     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_usage_server ON mcp_usage(server_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_usage_tool ON mcp_usage(server_id, tool_name, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_usage_task ON mcp_usage(task_id);
+
 -- =====================================================================
 -- H. 内置工具目录
 -- =====================================================================
@@ -942,8 +1243,14 @@ CREATE TABLE IF NOT EXISTS tools (
     kind        TEXT    NOT NULL DEFAULT 'builtin',
     exec        JSONB   NOT NULL DEFAULT '{}',
     deferred    BOOLEAN NOT NULL DEFAULT false,
+    directory   TEXT    NOT NULL DEFAULT '',
+    usage_help  TEXT    NOT NULL DEFAULT '',
+    when_to_use TEXT    NOT NULL DEFAULT '',
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE tools ADD COLUMN IF NOT EXISTS directory   TEXT NOT NULL DEFAULT '';
+ALTER TABLE tools ADD COLUMN IF NOT EXISTS usage_help  TEXT NOT NULL DEFAULT '';
+ALTER TABLE tools ADD COLUMN IF NOT EXISTS when_to_use TEXT NOT NULL DEFAULT '';
 DROP TRIGGER IF EXISTS trg_tools_upd ON tools;
 CREATE TRIGGER trg_tools_upd BEFORE UPDATE ON tools
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -1095,14 +1402,21 @@ CREATE TABLE IF NOT EXISTS findings (
     -- false_positive 误报 / ignored 忽略 / duplicate 重复 / risk_accepted 风险接受。
     -- 取值不加 CHECK：旧库靠下面的 ALTER 补列,CHECK 无法回填,统一由 server 侧白名单校验。
     status      TEXT NOT NULL DEFAULT 'pending',
-    -- 漏洞详细报告(Markdown)；默认空,仅详情页读取/展示,不进列表接口以免 payload 膨胀。
+    -- 漏洞提交报告(Markdown)；人类查看/导出的精简版，技术细节放 report_detail。
     report      TEXT NOT NULL DEFAULT '',
+    -- 漏洞技术明细(Markdown)；保存完整验证细节，供 context_search/内部复盘使用，不导出。
+    report_detail TEXT NOT NULL DEFAULT '',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS name   TEXT NOT NULL DEFAULT '';
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS report TEXT NOT NULL DEFAULT '';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS report_detail TEXT NOT NULL DEFAULT '';
+-- 旧库升级：旧 report 同时承担提交版和技术明细；先原样复制，保证技术内容不丢。
+UPDATE findings SET report_detail = report WHERE report_detail = '' AND report <> '';
 CREATE INDEX IF NOT EXISTS idx_findings_task ON findings(task_id, created_at DESC);
+-- Task selectors anti-join legacy graph nodes before pagination.
+CREATE INDEX IF NOT EXISTS idx_findings_task_node ON findings(task_id, node_id) WHERE node_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_findings_time ON findings(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status, created_at DESC);
 -- 「按资产」视图靠 asset_ids @> '[<id>]' 反查发现,没有这个 GIN 索引就是全表扫。
@@ -1228,159 +1542,288 @@ CREATE INDEX IF NOT EXISTS idx_side_requests_history ON side_question_requests(s
 ALTER TABLE side_question_sessions ADD COLUMN IF NOT EXISTS memory JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE side_question_requests ADD COLUMN IF NOT EXISTS context_info JSONB NOT NULL DEFAULT '{}';
 
--- =====================================================================
--- 资产拦截规则（全局黑名单）
--- 独立于 §K 命令拦截(intercept_rules)：intercept_rules 匹配工具名/入参文本，
--- 这张表匹配「目标资产」——全等/模糊的域名·IP·URL 以及 CIDR 网段。
--- 仅存规则；具体的匹配/拦截逻辑在别处实现。
--- kind 七种：
---   exact_domain / exact_ip / exact_url  —— 全等匹配
---   fuzzy_domain / fuzzy_ip / fuzzy_url  —— 模糊匹配
---   cidr                                 —— CIDR 网段
--- =====================================================================
-CREATE TABLE IF NOT EXISTS asset_intercept_rules (
-    id          BIGSERIAL PRIMARY KEY,
-    enabled     BOOLEAN NOT NULL DEFAULT true,
-    kind        TEXT NOT NULL CHECK (kind IN (
-                    'exact_domain', 'exact_ip', 'exact_url',
-                    'fuzzy_domain', 'fuzzy_ip', 'fuzzy_url',
-                    'cidr')),
-    pattern     TEXT NOT NULL,
-    note        TEXT NOT NULL DEFAULT '',
-    builtin     BOOLEAN NOT NULL DEFAULT false,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- Immutable creation visibility for browser-local unread cursors. Add nullable
+-- columns first: no volatile-default rewrite/backfill of historical business data.
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS notification_xid xid8;
+ALTER TABLE findings ALTER COLUMN notification_xid SET DEFAULT pg_current_xact_id();
+ALTER TABLE task_asset_links ADD COLUMN IF NOT EXISTS notification_xid xid8;
+ALTER TABLE task_asset_links ALTER COLUMN notification_xid SET DEFAULT pg_current_xact_id();
+ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS notification_xid xid8;
+ALTER TABLE intercept_pending ALTER COLUMN notification_xid SET DEFAULT pg_current_xact_id();
+CREATE INDEX IF NOT EXISTS idx_intercept_notification_pending ON intercept_pending(task_id) WHERE status='pending';
+
+-- User-managed worker queue and deletion receipts belong to the task exploration.
+ALTER TABLE explorations ADD COLUMN IF NOT EXISTS worker_queue_manual BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE explorations ADD COLUMN IF NOT EXISTS worker_queue_version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE exploration_nodes ADD COLUMN IF NOT EXISTS queue_position BIGINT NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS deleted_workers (
+    exploration_id BIGINT NOT NULL REFERENCES explorations(id) ON DELETE CASCADE,
+    intent_id BIGINT NOT NULL,
+    payload JSONB NOT NULL,
+    deleted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (exploration_id, intent_id)
 );
-CREATE INDEX IF NOT EXISTS idx_asset_intercept_enabled ON asset_intercept_rules(enabled);
-DROP TRIGGER IF EXISTS trg_asset_intercept_rules_upd ON asset_intercept_rules;
-CREATE TRIGGER trg_asset_intercept_rules_upd BEFORE UPDATE ON asset_intercept_rules
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE OR REPLACE FUNCTION assign_worker_queue_position() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.kind='intent' AND NEW.state='open' AND NEW.payload->>'cancelled_by_user' IS DISTINCT FROM 'true' THEN
+        IF TG_OP='INSERT' OR OLD.state IS DISTINCT FROM 'open' OR OLD.payload->>'cancelled_by_user'='true' THEN
+            IF (SELECT worker_queue_manual FROM explorations WHERE id=NEW.exploration_id) AND NOT (TG_OP='INSERT' AND NEW.queue_position>0) THEN
+                SELECT COALESCE(MAX(queue_position),0)+1 INTO NEW.queue_position
+                  FROM exploration_nodes WHERE exploration_id=NEW.exploration_id AND kind='intent';
+            END IF;
+        END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS trg_worker_queue_position ON exploration_nodes;
+CREATE TRIGGER trg_worker_queue_position BEFORE INSERT OR UPDATE ON exploration_nodes
+FOR EACH ROW EXECUTE FUNCTION assign_worker_queue_position();
+CREATE OR REPLACE FUNCTION bump_worker_queue_version() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP='DELETE' THEN
+        IF OLD.kind='intent' THEN
+            UPDATE explorations SET worker_queue_version=worker_queue_version+1 WHERE id=OLD.exploration_id;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF NEW.kind='intent' THEN
+        IF TG_OP='INSERT' OR NEW.state IS DISTINCT FROM OLD.state OR NEW.priority IS DISTINCT FROM OLD.priority
+           OR NEW.queue_position IS DISTINCT FROM OLD.queue_position
+           OR (NEW.payload->>'cancelled_by_user') IS DISTINCT FROM (OLD.payload->>'cancelled_by_user') THEN
+            UPDATE explorations SET worker_queue_version=worker_queue_version+1 WHERE id=NEW.exploration_id;
+        END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS trg_worker_queue_version ON exploration_nodes;
+CREATE TRIGGER trg_worker_queue_version AFTER INSERT OR UPDATE OR DELETE ON exploration_nodes
+FOR EACH ROW EXECUTE FUNCTION bump_worker_queue_version();
+CREATE INDEX IF NOT EXISTS idx_worker_queue_position ON exploration_nodes(exploration_id,queue_position,id)
+WHERE kind='intent' AND state='open';
 
--- =====================================================================
--- 任务级资产拦截/允许规则
--- 与全局 asset_intercept_rules 同构（kind/pattern/note/enabled），但按 task_id
--- 关联、随任务级联删除；创建任务时录入、任务详情里可编辑。
--- action: 'block'=拦截(禁止测试)  'allow'=允许(白名单)。
--- 执行判定：先按 拦截规则(全局 ∪ 任务block) 匹配，命中即禁止；未命中且该任务存在
--- 启用的 allow 规则时，须命中某条 allow 才放行，否则「不允许测试」。
--- =====================================================================
-CREATE TABLE IF NOT EXISTS task_intercept_rules (
-    id          BIGSERIAL PRIMARY KEY,
-    task_id     BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    enabled     BOOLEAN NOT NULL DEFAULT true,
-    action      TEXT NOT NULL DEFAULT 'block' CHECK (action IN ('block','allow')),
-    kind        TEXT NOT NULL CHECK (kind IN (
-                    'exact_domain', 'exact_ip', 'exact_url',
-                    'fuzzy_domain', 'fuzzy_ip', 'fuzzy_url',
-                    'cidr')),
-    pattern     TEXT NOT NULL,
-    note        TEXT NOT NULL DEFAULT '',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- Deletion feedback survives its finding and is private to the owning task agents.
+CREATE TABLE IF NOT EXISTS finding_deletion_feedback (
+ id BIGSERIAL PRIMARY KEY,
+ finding_id BIGINT NOT NULL,
+ task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+ title TEXT NOT NULL DEFAULT '',
+ vulnclass TEXT NOT NULL DEFAULT '',
+ reason TEXT NOT NULL DEFAULT '' CHECK (char_length(reason)<=2000),
+ deleted_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_task_intercept_task ON task_intercept_rules(task_id);
--- 补旧库(本会话早前建过该表、无 action 列)：加列(带 IF NOT EXISTS)。
-ALTER TABLE task_intercept_rules ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'block';
-DROP TRIGGER IF EXISTS trg_task_intercept_rules_upd ON task_intercept_rules;
-CREATE TRIGGER trg_task_intercept_rules_upd BEFORE UPDATE ON task_intercept_rules
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE INDEX IF NOT EXISTS idx_finding_deletion_feedback_task ON finding_deletion_feedback(task_id,id DESC);
 
--- =====================================================================
--- M. 漏洞 IM 推送
---
--- 三张表刻意分开，核心是**爆炸半径**：写漏洞的那个事务(RecordFindingTx，
--- 持任务行锁)只允许做一次盲 INSERT，不读渠道表、不跑用户的过滤规则。否则
--- 一条配错的 webhook 过滤条件就能污染/中止事务，导致漏洞存不进去。
---
---   notification_channels   渠道实例配置(可变、含凭据、UI 管理)
---   notification_events     事件事实(写漏洞事务内盲插，含渲染快照)
---   notification_deliveries 投递任务(事务外 fan-out 产生，承载状态/重试/批次)
--- =====================================================================
+-- Execution selection is independent of queue ordering and task lifecycle.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'managed' CHECK (execution_mode IN ('managed','manual'));
 
--- 渠道实例：同一 kind 可配任意多个(如「应急群」「日常群」各一个钉钉机器人)。
--- kind 取值由 server 侧白名单校验，不加 CHECK：与 findings.status 同理，
--- 后续加渠道不应要求改表结构。
-CREATE TABLE IF NOT EXISTS notification_channels (
-    id           BIGSERIAL PRIMARY KEY,
-    name         TEXT NOT NULL,
-    -- dingtalk 钉钉 / feishu 飞书 / wecom 企业微信 / webhook 通用 / telegram / email
-    kind         TEXT NOT NULL,
-    enabled      BOOLEAN NOT NULL DEFAULT true,
-    -- 凭据(明文存储，UI 掩码回显；见 server 侧 maskChannelSecrets)。六种渠道字段差异极大，
-    -- 统一 JSONB + Go 侧按 kind 严格校验，避免为每渠道加一堆 NULL 列：
-    --   dingtalk {webhook,secret}
-    --   feishu   {webhook,secret}
-    --   wecom    {webhook}
-    --   webhook  {url,method,content_type,headers{},body_template}
-    --   telegram {bot_token,chat_id,base_url}
-    --   email    {host,port,username,password,from,to[],tls}
-    config       JSONB NOT NULL DEFAULT '{}',
-    -- 推送时机：realtime 命中即推 / digest 进批次按全局周期汇总成一条。
-    mode         TEXT NOT NULL DEFAULT 'realtime',
-    -- 过滤条件，字段全部可选(缺省=不过滤)：
-    --   min_severity       ''|low|medium|high|critical
-    --   task_ids/asset_ids 空数组=不限；非空则须交集非空
-    --   vulnclass_include/exclude 关键词数组(大小写不敏感子串)；include 空=全收
-    --   on_status_change   bool，仅 realtime 模式有意义
-    filter       JSONB NOT NULL DEFAULT '{}',
-    -- 每分钟投递上限；0=不限流。默认 20 对齐钉钉/企微官方硬限。
-    -- 超限不丢消息，只把投递推迟到下一个 tick。
-    rate_per_min INTEGER NOT NULL DEFAULT 20,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-DROP TRIGGER IF EXISTS trg_notification_channels_upd ON notification_channels;
-CREATE TRIGGER trg_notification_channels_upd BEFORE UPDATE ON notification_channels
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+ALTER TABLE tools ADD COLUMN IF NOT EXISTS executable TEXT NOT NULL DEFAULT '';
 
--- 事件事实。由 RecordFindingTx / 状态变更事务**同事务**写入，保证「漏洞落库」
--- 与「推送任务存在」原子一致——不存在提交成功但没入队、消息永久丢失的窗口。
--- snapshot 刻意冗余：漏洞事后会被改名/改级别/改状态，推送内容应反映「事发当时」，
--- 且 fan-out 与渲染不必回查 findings/tasks/assets 多张表。
--- finding 删除后事件不级联删除：与 findings 表「任务删除仍独立留存」的语义一致。
-CREATE TABLE IF NOT EXISTS notification_events (
-    id         BIGSERIAL PRIMARY KEY,
-    -- finding_created | finding_status_changed
-    kind       TEXT NOT NULL,
-    finding_id BIGINT NOT NULL,
-    snapshot   JSONB NOT NULL,
-    -- fan-out 幂等标记：dispatcher 按此列取待分派事件，处理完置 true。
-    -- 用列而非删行，以便投递历史能回溯到事件。
-    fanned_out BOOLEAN NOT NULL DEFAULT false,
+-- Main-agent dispatch receipts. Final delivery and node settlement share the
+-- same transaction; SSE is only a notification, never the durable source.
+CREATE TABLE IF NOT EXISTS worker_feedback (
+    id BIGSERIAL PRIMARY KEY,
+    exploration_id BIGINT NOT NULL REFERENCES explorations(id) ON DELETE CASCADE,
+    task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    intent_id BIGINT NOT NULL,
+    main_seg INTEGER NOT NULL CHECK (main_seg >= 0),
+    after_activity BIGINT NOT NULL DEFAULT 0,
+    terminal BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_notification_events_pending
-    ON notification_events(id) WHERE NOT fanned_out;
-
--- 投递任务：一条事件 × 一个启用渠道 = 一行。fan-out 在事务外做，所以渠道
--- 后开不会补历史(与 agent_triggers 的「迟开 trigger 不补历史」语义一致，
--- 避免启用渠道时一次性刷屏历史积压)。
--- channel_id 级联删除：渠道配置都没了，其投递历史无意义。
-CREATE TABLE IF NOT EXISTS notification_deliveries (
-    id          BIGSERIAL PRIMARY KEY,
-    event_id    BIGINT NOT NULL REFERENCES notification_events(id) ON DELETE CASCADE,
-    channel_id  BIGINT NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE,
-    -- pending 待发 / sent 已发 / failed 重试耗尽(可手动重发) / skipped 渠道停用或批次取消
-    -- pending 待发 / sending 已被某 dispatcher 领取(租约未到期) / sent 已发 /
-    -- failed 重试耗尽或永久失败(可手动重发) / skipped 渠道停用。取值不加 CHECK，
-    -- 与 findings.status 同理，由 server 侧白名单校验。
-    state       TEXT NOT NULL DEFAULT 'pending',
-    attempts    INTEGER NOT NULL DEFAULT 0,
-    -- 兼作「下次可领取时间」与「租约到期时间」：领取时把它推到未来即构成租约，
-    -- 于是「租约未到期」与「未到重试时间」共用同一个条件表达，不需要额外的
-    -- lease_until 列。进程崩溃留下的 sending 行会因租约到期被下一轮重新领取。
-    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_error  TEXT NOT NULL DEFAULT '',
-    -- digest 模式同批次共享；realtime 恒为 NULL。整批渲染成一条消息后一起置 sent。
-    batch_id    BIGINT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    sent_at     TIMESTAMPTZ
+CREATE UNIQUE INDEX IF NOT EXISTS worker_feedback_active
+    ON worker_feedback(exploration_id,intent_id,main_seg) WHERE NOT terminal;
+CREATE INDEX IF NOT EXISTS worker_feedback_intent ON worker_feedback(exploration_id,intent_id,id);
+CREATE TABLE IF NOT EXISTS worker_feedback_delivery (
+    activity_id BIGINT PRIMARY KEY REFERENCES activity(id) ON DELETE CASCADE,
+    task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    published BOOLEAN NOT NULL DEFAULT false
 );
-CREATE INDEX IF NOT EXISTS idx_notification_deliveries_due
-    ON notification_deliveries(next_attempt_at) WHERE state='pending';
-CREATE INDEX IF NOT EXISTS idx_notification_deliveries_history
-    ON notification_deliveries(id DESC);
-CREATE INDEX IF NOT EXISTS idx_notification_deliveries_batch
-    ON notification_deliveries(batch_id) WHERE batch_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_notification_deliveries_channel
-    ON notification_deliveries(channel_id, id DESC);
+CREATE INDEX IF NOT EXISTS worker_feedback_unpublished ON worker_feedback_delivery(activity_id) WHERE NOT published;
+CREATE INDEX IF NOT EXISTS worker_feedback_task_delivery ON worker_feedback_delivery(task_id,activity_id);
+CREATE INDEX IF NOT EXISTS activity_worker_feedback_context ON activity(exploration_id,main_seg,id)
+    WHERE worker='mainagent' AND metadata ? 'worker_feedback';
+
+CREATE TABLE IF NOT EXISTS worker_feedback_run (
+    intent_id BIGINT PRIMARY KEY REFERENCES exploration_nodes(id) ON DELETE CASCADE,
+    after_activity BIGINT NOT NULL DEFAULT 0
+);
+
+CREATE OR REPLACE FUNCTION notify_worker_feedback() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE f RECORD; result_id BIGINT; result_text TEXT; body TEXT; aid BIGINT; target_state TEXT; is_terminal BOOLEAN;
+BEGIN
+    IF OLD.kind <> 'intent' OR NOT EXISTS (SELECT 1 FROM tasks WHERE exploration_id=OLD.exploration_id AND deleted_at IS NULL) THEN RETURN NULL; END IF;
+    IF TG_OP = 'DELETE' THEN target_state := 'deleted'; ELSE target_state := NEW.state; END IF;
+    IF TG_OP = 'UPDATE' AND OLD.state IS NOT DISTINCT FROM NEW.state THEN RETURN NULL; END IF;
+    -- An explicit rerun follows the original subscriber(s), but only when it is
+    -- actually claimed. Failed admission/reopen rollback creates no new receipt.
+    IF target_state = 'running' THEN
+        INSERT INTO worker_feedback_run(intent_id,after_activity)
+        VALUES(OLD.id,COALESCE((SELECT max(id) FROM activity WHERE exploration_id=OLD.exploration_id AND node_id=OLD.id),0))
+        ON CONFLICT(intent_id) DO UPDATE SET after_activity=EXCLUDED.after_activity;
+        UPDATE worker_feedback SET after_activity=(SELECT after_activity FROM worker_feedback_run WHERE intent_id=OLD.id)
+        WHERE exploration_id=OLD.exploration_id AND intent_id=OLD.id AND NOT terminal;
+        INSERT INTO worker_feedback(exploration_id,task_id,intent_id,main_seg,after_activity)
+        SELECT DISTINCT ON (prev.main_seg) prev.exploration_id,prev.task_id,prev.intent_id,prev.main_seg,
+            COALESCE((SELECT max(id) FROM activity WHERE exploration_id=OLD.exploration_id AND node_id=OLD.id),0)
+        FROM worker_feedback prev WHERE prev.exploration_id=OLD.exploration_id AND prev.intent_id=OLD.id
+        ORDER BY prev.main_seg,prev.id DESC
+        ON CONFLICT (exploration_id,intent_id,main_seg) WHERE NOT terminal DO NOTHING;
+        RETURN NULL;
+    END IF;
+    is_terminal := target_state IN ('done','blocked','exhausted','stopped','deleted');
+    IF NOT is_terminal AND target_state NOT IN ('paused','open') THEN RETURN NULL; END IF;
+    FOR f IN SELECT * FROM worker_feedback WHERE exploration_id=OLD.exploration_id AND intent_id=OLD.id AND NOT terminal FOR UPDATE LOOP
+        result_id := NULL; result_text := NULL;
+        IF is_terminal THEN
+            SELECT id,COALESCE(NULLIF(detail,''),summary) INTO result_id,result_text FROM activity
+            WHERE exploration_id=OLD.exploration_id AND node_id=OLD.id AND id>f.after_activity AND kind='result'
+            ORDER BY id DESC LIMIT 1;
+        END IF;
+        body := format('### Worker %s · 意图 #%s', CASE WHEN is_terminal THEN '结果' ELSE '状态' END,OLD.id)
+            || E'\n\n状态：' || CASE target_state WHEN 'done' THEN '已完成' WHEN 'blocked' THEN '执行失败'
+            WHEN 'exhausted' THEN '预算或时间耗尽' WHEN 'stopped' THEN '已终止' WHEN 'deleted' THEN '已删除'
+            WHEN 'paused' THEN '已暂停，恢复后继续跟踪' ELSE '等待执行或审批，恢复后继续跟踪' END
+            || CASE WHEN is_terminal THEN E'\n\n' || COALESCE(NULLIF(result_text,''),'本次未产生最终总结，请查看 Worker 会话中的已有记录。') ELSE '' END;
+        IF result_id IS NULL THEN
+            SELECT id INTO result_id FROM activity WHERE exploration_id=OLD.exploration_id AND node_id=OLD.id ORDER BY id DESC LIMIT 1;
+        END IF;
+        IF target_state <> 'deleted' AND result_id IS NOT NULL THEN
+            body := body || format(E'\n\n[查看 Worker 原始会话](/function/tasks/detail?id=%s&session=intent:%s&activity=%s)',f.task_id,OLD.id,result_id);
+        END IF;
+        INSERT INTO activity(exploration_id,worker,kind,summary,detail,main_seg,is_error,metadata)
+        VALUES(f.exploration_id,'mainagent','text',left(body,400),body,f.main_seg,
+            target_state IN ('blocked','exhausted','stopped','deleted'),
+            jsonb_build_object('worker_feedback',jsonb_build_object('id',f.id,'intent_id',OLD.id,'state',target_state,'source_activity_id',result_id))) RETURNING id INTO aid;
+        INSERT INTO worker_feedback_delivery(activity_id,task_id) VALUES(aid,f.task_id);
+        IF is_terminal THEN UPDATE worker_feedback SET terminal=true WHERE id=f.id; END IF;
+    END LOOP;
+    RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS worker_feedback_state ON exploration_nodes;
+CREATE TRIGGER worker_feedback_state AFTER UPDATE OF state OR DELETE ON exploration_nodes
+FOR EACH ROW EXECUTE FUNCTION notify_worker_feedback();
+
+-- User deletion rules are immutable except for explicit revocation. Historical
+-- feedback is deliberately not backfilled into active rules.
+CREATE TABLE IF NOT EXISTS finding_suppression_rules (
+ id BIGSERIAL PRIMARY KEY,
+ feedback_id BIGINT NOT NULL UNIQUE REFERENCES finding_deletion_feedback(id),
+ task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+ title TEXT NOT NULL DEFAULT '', vulnclass TEXT NOT NULL DEFAULT '',
+ summary TEXT NOT NULL DEFAULT '', asset_ids JSONB NOT NULL DEFAULT '[]', targets JSONB NOT NULL DEFAULT '[]',
+ reason TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ revoked_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_finding_suppression_task ON finding_suppression_rules(task_id,id DESC);
+ALTER TABLE finding_suppression_rules ADD COLUMN IF NOT EXISTS targets JSONB NOT NULL DEFAULT '[]';
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- fork-only: 联盟系统（城商行联盟定制，feat/alliance-system，不合并上游）
+-- 3 张加法表；入口在新建任务时解析成标准资产（assets），这里只存情报与关联。
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS alliance_systems (
+    id            BIGSERIAL PRIMARY KEY,
+    name          TEXT NOT NULL,
+    url           TEXT NOT NULL DEFAULT '',
+    owner_unit    TEXT NOT NULL DEFAULT '',
+    platform      TEXT NOT NULL DEFAULT '',
+    framework     TEXT NOT NULL DEFAULT '',
+    crypto        TEXT NOT NULL DEFAULT '',
+    business      TEXT NOT NULL DEFAULT '',
+    security_note TEXT NOT NULL DEFAULT '',
+    tags          TEXT[] NOT NULL DEFAULT '{}',
+    status        TEXT NOT NULL DEFAULT 'active',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_alliance_systems_updated ON alliance_systems(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS alliance_endpoints (
+    id         BIGSERIAL PRIMARY KEY,
+    system_id  BIGINT NOT NULL REFERENCES alliance_systems(id) ON DELETE CASCADE,
+    url        TEXT NOT NULL,
+    host       TEXT NOT NULL DEFAULT '',
+    port       INTEGER,
+    scheme     TEXT NOT NULL DEFAULT '',
+    note       TEXT NOT NULL DEFAULT '',
+    asset_id   BIGINT REFERENCES assets(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_alliance_endpoints_system_url ON alliance_endpoints(system_id, url);
+CREATE INDEX IF NOT EXISTS idx_alliance_endpoints_system ON alliance_endpoints(system_id, id);
+
+CREATE TABLE IF NOT EXISTS alliance_task_links (
+    task_id    BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    system_id  BIGINT NOT NULL REFERENCES alliance_systems(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (task_id, system_id)
+);
+CREATE INDEX IF NOT EXISTS idx_alliance_task_links_system ON alliance_task_links(system_id);
+
+-- =====================================================================
+-- 联盟画像（feat/alliance-profile）：结构化画像文档、版本历史、任务快照、
+-- 软提示阅读与反哺建议。全部为加法表/列，旧二进制忽略它们即可回滚。
+-- =====================================================================
+ALTER TABLE alliance_systems ADD COLUMN IF NOT EXISTS environment TEXT NOT NULL DEFAULT '';
+ALTER TABLE alliance_systems ADD COLUMN IF NOT EXISTS document JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE alliance_systems ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
+CREATE TABLE IF NOT EXISTS alliance_profile_revisions (
+    system_id  BIGINT NOT NULL REFERENCES alliance_systems(id) ON DELETE CASCADE,
+    version    BIGINT NOT NULL,
+    snapshot   JSONB NOT NULL,
+    source     TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (system_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS alliance_task_snapshots (
+    task_id         BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    system_id       BIGINT NOT NULL,
+    system_name     TEXT NOT NULL DEFAULT '',
+    profile_version BIGINT NOT NULL,
+    snapshot        JSONB NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (task_id, system_id)
+);
+CREATE INDEX IF NOT EXISTS idx_alliance_task_snapshots_system ON alliance_task_snapshots(system_id);
+
+CREATE TABLE IF NOT EXISTS alliance_task_readings (
+    task_id    BIGINT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    state      TEXT NOT NULL DEFAULT 'pending',
+    result     TEXT NOT NULL DEFAULT '',
+    error      TEXT NOT NULL DEFAULT '',
+    read_at    TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS alliance_profile_feedback_runs (
+    id           BIGSERIAL PRIMARY KEY,
+    task_id      BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    completed_at TIMESTAMPTZ NOT NULL,
+    state        TEXT NOT NULL DEFAULT 'pending',
+    error        TEXT NOT NULL DEFAULT '',
+    lease_until  TIMESTAMPTZ,
+    attempt      BIGINT NOT NULL DEFAULT 0,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(task_id, completed_at)
+);
+
+CREATE TABLE IF NOT EXISTS alliance_profile_suggestions (
+    id               BIGSERIAL PRIMARY KEY,
+    run_id           BIGINT NOT NULL REFERENCES alliance_profile_feedback_runs(id) ON DELETE CASCADE,
+    task_id          BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    system_id        BIGINT NOT NULL,
+    suggestion       JSONB NOT NULL,
+    state            TEXT NOT NULL DEFAULT 'pending',
+    accepted_value   TEXT NOT NULL DEFAULT '',
+    accepted_version BIGINT,
+    reviewed_at      TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_alliance_suggestions_system ON alliance_profile_suggestions(system_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_alliance_suggestions_task ON alliance_profile_suggestions(task_id, id DESC);
+
+-- Structured, immutable reproduction captured at discovery time.
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS reproduction JSONB;

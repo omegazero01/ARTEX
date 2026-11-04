@@ -2,222 +2,249 @@
 
 import * as React from "react";
 
-import Link from "next/link";
-
-import { ArrowDownIcon, ArrowUpIcon, ArrowUpRightIcon, ChevronRightIcon } from "lucide-react";
+import { DownloadIcon } from "lucide-react";
 import { toast } from "sonner";
 
-import { StatusBadge } from "@/components/status-badge";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { FindingWorkspaceDetail } from "@/components/finding-detail-content";
+import { FindingPagination } from "@/components/finding-pagination";
+import { FindingLayoutToggle, FindingPresentation, useFindingPresentation } from "@/components/finding-presentation";
+import { FindingSelector } from "@/components/finding-selector";
+import { FindingSuppressionRules } from "@/components/finding-suppression-rules";
+import { FindingsToolbar } from "@/components/findings-toolbar";
+import { useNotificationRead } from "@/components/task-notifications";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 import { api } from "@/lib/api";
+import { findingRowKey, selectFinding } from "@/lib/findings";
 import { useStoredSortPreference } from "@/lib/sort-preference";
-import { statusMeta } from "@/lib/status";
-import type { Finding, FindingStatus } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { FindingsPage, TaskFindingFilters } from "@/lib/types";
 
-type FindingSortField = "time";
-
-const FINDING_SORT_FIELDS: readonly FindingSortField[] = ["time"];
-const FINDING_SORT_PREFERENCE_KEY = "artex_task_findings_sort";
-
-function findingLabel(finding: Finding): string {
-  if (finding.name?.trim()) return finding.name;
-  if (finding.vulnclass?.trim()) return finding.vulnclass;
-  return "未分类";
-}
-
-const FINDING_STATUSES: FindingStatus[] = [
-  "pending",
-  "in_progress",
-  "confirmed",
-  "resolved",
-  "fixed",
-  "false_positive",
-  "ignored",
-  "duplicate",
-  "risk_accepted",
-];
-
-function Row({
-  f,
-  contextTaskId,
-  onStatus,
-}: {
-  f: Finding;
-  contextTaskId: string;
-  onStatus: (f: Finding, next: FindingStatus) => void;
-}) {
-  const [open, setOpen] = React.useState(false);
-  return (
-    <div className="border-b last:border-b-0">
-      <div className="flex w-full items-center gap-3 px-4 py-3 text-sm hover:bg-accent/40">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className="flex min-w-0 flex-1 items-center gap-3 text-left"
-        >
-          <ChevronRightIcon
-            className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
-          />
-          <StatusBadge domain="severity" value={f.severity} dot />
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate font-medium">{findingLabel(f)}</span>
-              {f.inherited && f.source_task_id && (
-                <Badge variant="outline" className="shrink-0">
-                  来源 #{f.source_task_id} · 只读
-                </Badge>
-              )}
-            </div>
-            <span className="truncate text-xs text-muted-foreground">{f.summary}</span>
-          </div>
-        </button>
-        <Badge variant="outline">流量证据 {f.traffic_count ?? 0} 条</Badge>
-        {f.assets && f.assets.length > 0 && (
-          <div className="hidden shrink-0 flex-wrap justify-end gap-1 sm:flex">
-            {f.assets.slice(0, 2).map((a) => (
-              <code
-                key={a.id}
-                className="max-w-[10rem] truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
-                title={`${a.type} · ${a.label}`}
-              >
-                {a.label}
-              </code>
-            ))}
-            {f.assets.length > 2 && <span className="text-xs text-muted-foreground">+{f.assets.length - 2}</span>}
-          </div>
-        )}
-        {f.finding_id && !f.inherited ? (
-          <Select value={f.status} onValueChange={(v) => onStatus(f, v as FindingStatus)}>
-            <SelectTrigger size="sm" className="h-7 w-28 shrink-0 border-none px-1 shadow-none focus-visible:ring-0">
-              <StatusBadge domain="finding" value={f.status} dot />
-            </SelectTrigger>
-            <SelectContent position="popper" align="end">
-              <SelectGroup>
-                {FINDING_STATUSES.map((st) => (
-                  <SelectItem key={st} value={st}>
-                    {statusMeta("finding", st).label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        ) : (
-          <StatusBadge domain="finding" value={f.status} dot />
-        )}
-        <span className="hidden shrink-0 text-xs text-muted-foreground md:block">
-          {new Date(f.ts).toLocaleString("zh-CN")}
-        </span>
-        {f.finding_id && (
-          <Link
-            href={
-              f.inherited
-                ? `/function/findings/detail?id=${f.finding_id}&context_task=${contextTaskId}`
-                : `/function/findings/detail?id=${f.finding_id}`
-            }
-            className="text-muted-foreground hover:text-primary inline-flex shrink-0 items-center gap-0.5 text-xs"
-            title="查看漏洞详情"
-          >
-            详情
-            <ArrowUpRightIcon className="size-3" />
-          </Link>
-        )}
-      </div>
-      {open && (
-        <div className="bg-muted/30 px-4 pb-4 pl-11">
-          <div className="mb-1 text-xs font-medium text-muted-foreground">证据 / PoC</div>
-          <pre className="overflow-auto rounded-md border bg-background p-3 font-mono text-xs whitespace-pre-wrap">
-            {f.evidence}
-          </pre>
-        </div>
-      )}
-    </div>
-  );
-}
-
+const FIELDS = ["time"] as const;
 export function FindingsTab({ taskId }: { taskId: string }) {
-  const [findings, setFindings] = React.useState<Finding[]>([]);
-  const [sortPreference, setSortPreference] = useStoredSortPreference(
-    FINDING_SORT_PREFERENCE_KEY,
-    FINDING_SORT_FIELDS,
-    "time",
-    "desc",
-  );
-
+  return <TaskFindings key={taskId} taskId={taskId} />;
+}
+function TaskFindings({ taskId }: { taskId: string }) {
+  const presentation = useFindingPresentation("series_task_findings_layout");
+  const beginRead = useNotificationRead("findings");
+  const [sort, setSort] = useStoredSortPreference("series_task_findings_sort", FIELDS, "time", "desc");
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(50);
+  const [filters, setFilters] = React.useState<TaskFindingFilters>({
+    scope: "all",
+    status: "all",
+    severity: "all",
+    query: "",
+  });
+  const [search, setSearch] = React.useState("");
+  const [data, setData] = React.useState<FindingsPage | null>(null);
+  const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
+  const [exporting, setExporting] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const [revision, refresh] = React.useReducer((n: number) => n + 1, 0);
+  const changeFilters = React.useCallback((value: Partial<TaskFindingFilters>) => {
+    setFilters((current) => ({ ...current, ...value }));
+    setData(null);
+    setPage(1);
+  }, []);
   React.useEffect(() => {
+    if (search.trim() === filters.query) return;
+    const timer = setTimeout(() => changeFilters({ query: search.trim() }), 300);
+    return () => clearTimeout(timer);
+  }, [search, filters.query, changeFilters]);
+  React.useEffect(() => {
+    void revision;
     let active = true;
-    const load = () => {
-      api
-        .findings(taskId)
-        .then((fs) => {
-          if (active) setFindings(fs);
-        })
-        .catch(() => {
-          // Keep the last successful snapshot during transient refresh failures.
+    let timer: ReturnType<typeof setTimeout>;
+    async function load() {
+      const markRead = beginRead();
+      try {
+        const value = await api.taskFindingsPage(taskId, page, pageSize, sort.direction, filters);
+        if (!active) return;
+        const lastPage = Math.max(1, Math.ceil(value.total / pageSize));
+        if (page > lastPage) {
+          setPage(lastPage);
+          return;
+        }
+        setData(value);
+        setSelectedKey((key) => {
+          const selected = selectFinding(value.items, key);
+          return selected ? findingRowKey(selected) : null;
         });
-    };
-    load();
-    const t = setInterval(load, 3000);
+        setError("");
+        markRead();
+      } catch (e) {
+        if (active) setError((e as Error).message);
+      } finally {
+        if (active) timer = setTimeout(() => void load(), 3000);
+      }
+    }
+    void load();
     return () => {
       active = false;
-      clearInterval(t);
+      clearTimeout(timer);
     };
-  }, [taskId]);
-
-  const onStatus = React.useCallback(async (f: Finding, next: FindingStatus) => {
-    if (f.inherited || !f.finding_id || next === f.status) return;
-    const prev = f.status;
-    setFindings((cur) => cur.map((x) => (x.id === f.id ? { ...x, status: next } : x)));
-    try {
-      await api.setFindingStatus(f.finding_id, next);
-      toast.success(`已标记为「${statusMeta("finding", next).label}」`);
-    } catch (e) {
-      setFindings((cur) => cur.map((x) => (x.id === f.id ? { ...x, status: prev } : x)));
-      toast.error("更新失败：" + (e as Error).message);
-    }
-  }, []);
-
-  const items = findings
-    .filter((f) => f.task_id === taskId || f.inherited)
-    .sort((a, b) => {
-      const compared = Date.parse(a.ts) - Date.parse(b.ts);
-      if (compared !== 0) return sortPreference.direction === "asc" ? compared : -compared;
-      return b.id.localeCompare(a.id, undefined, { numeric: true });
+  }, [taskId, page, pageSize, sort.direction, filters, beginRead, revision]);
+  const selected = data ? selectFinding(data.items, selectedKey) : null;
+  function toggle(ids: string[], checked: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      for (const id of ids) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
     });
-
+  }
+  async function exportSelected() {
+    if (exporting || !selectedIds.size) return;
+    setExporting(true);
+    try {
+      await api.exportFindings({ format: "md-report-zip", scope: "selected", ids: [...selectedIds] });
+      toast.success("已开始下载导出文件");
+    } catch (e) {
+      toast.error(`导出失败：${(e as Error).message}`);
+    } finally {
+      setExporting(false);
+    }
+  }
   return (
-    <Card className="overflow-hidden py-0">
-      <CardContent className="px-0">
-        <div className="flex items-center border-b px-4 py-2 text-xs text-muted-foreground">
-          <span className="min-w-0 flex-1">漏洞</span>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 outline-none focus-visible:underline"
-            aria-label={`发现时间当前${sortPreference.direction === "asc" ? "正序" : "倒序"}，点击切换排序方向`}
-            onClick={() =>
-              setSortPreference((current) => ({
-                field: "time",
-                direction: current.direction === "asc" ? "desc" : "asc",
-              }))
-            }
-          >
-            <span>发现时间</span>
-            {sortPreference.direction === "asc" ? (
-              <ArrowUpIcon className="size-3.5" />
-            ) : (
-              <ArrowDownIcon className="size-3.5" />
-            )}
-          </button>
+    <section className="findings-workspace findings-task-workspace" data-findings-surface aria-label="任务发现">
+      <FindingsToolbar
+        total={data?.total}
+        search={search}
+        onSearch={setSearch}
+        sort={sort.direction}
+        onSort={(direction) => {
+          setData(null);
+          setPage(1);
+          setSort({ field: "time", direction: direction as "asc" | "desc" });
+        }}
+        sortOptions={[
+          { value: "desc", label: "最近发现" },
+          { value: "asc", label: "最早发现" },
+        ]}
+        view={filters.scope ?? "all"}
+        onView={(scope) => changeFilters({ scope: scope as TaskFindingFilters["scope"] })}
+        viewOptions={[
+          { value: "all", label: "全部发现" },
+          { value: "local", label: "当前任务" },
+          { value: "inherited", label: "关联任务" },
+        ]}
+        status={filters.status ?? "all"}
+        onStatus={(status) => changeFilters({ status: status as TaskFindingFilters["status"] })}
+        severity={filters.severity ?? "all"}
+        onSeverity={(severity) => changeFilters({ severity: severity as TaskFindingFilters["severity"] })}
+        activeFilters={[filters.status, filters.severity, filters.scope].filter((v) => v && v !== "all").length}
+        onReset={() => {
+          setSearch("");
+          changeFilters({ query: "", severity: "all", status: "all", scope: "all" });
+        }}
+        filters={
+          <Field>
+            <FieldLabel>详情展示</FieldLabel>
+            <FindingLayoutToggle value={presentation.layout} onChange={presentation.changeLayout} />
+            <FieldDescription>关联任务的发现保持只读。</FieldDescription>
+          </Field>
+        }
+        actions={
+          <>
+            <FindingSuppressionRules taskId={taskId} readOnly={filters.scope === "inherited"} />
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="导出选中发现"
+              title="选中发现后导出"
+              onClick={() => void exportSelected()}
+              disabled={exporting || selectedIds.size === 0}
+            >
+              {exporting ? <Spinner /> : <DownloadIcon />}
+            </Button>
+            {selectedIds.size > 0 && <span className="text-muted-foreground text-xs">已选 {selectedIds.size} 条</span>}
+          </>
+        }
+      />
+      <FindingPresentation
+        {...presentation}
+        onToggleList={presentation.toggleList}
+        onToggleDetail={presentation.toggleDetail}
+        onOpenChange={presentation.setDetailOpen}
+        detail={
+          selected ? (
+            <FindingWorkspaceDetail
+              finding={selected}
+              contextTask={taskId}
+              onChanged={refresh}
+              onDelete={async (finding, reason) => {
+                if (!finding.finding_id) return;
+                await api.deleteFinding(finding.finding_id, reason);
+                toggle([finding.finding_id], false);
+                setSelectedKey(null);
+                presentation.setDetailOpen(false);
+                refresh();
+              }}
+            />
+          ) : (
+            <p>请选择漏洞查看详情。</p>
+          )
+        }
+      >
+        <div className="findings-list-panel">
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>
+                加载失败：{error}
+                <Button variant="outline" size="sm" onClick={refresh}>
+                  重试
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {!data && !error ? (
+            <div className="flex justify-center p-8">
+              <Spinner />
+            </div>
+          ) : (
+            data && (
+              <FindingSelector
+                flat={presentation.layout === "flat"}
+                items={data?.items ?? []}
+                contextTask={taskId}
+                selectedKey={
+                  selected && (presentation.layout === "split" || presentation.detailOpen)
+                    ? findingRowKey(selected)
+                    : null
+                }
+                selectedIds={selectedIds}
+                onToggleSelected={(id, checked) => toggle([id], checked)}
+                onToggleSelectedPage={toggle}
+                onSelect={(item) => {
+                  setSelectedKey(findingRowKey(item));
+                  presentation.setDetailOpen(true);
+                }}
+              />
+            )
+          )}
+          {data && (
+            <FindingPagination
+              page={page}
+              pageSize={pageSize}
+              total={data.total}
+              onPageChange={(value) => {
+                setData(null);
+                setPage(value);
+              }}
+              onPageSizeChange={(value) => {
+                setData(null);
+                setPageSize(value);
+                setPage(1);
+              }}
+            />
+          )}
         </div>
-        {items.map((f) => (
-          <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
-        ))}
-        {items.length === 0 && (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">本任务及直接关联任务暂无确认发现。</p>
-        )}
-      </CardContent>
-    </Card>
+      </FindingPresentation>
+    </section>
   );
 }

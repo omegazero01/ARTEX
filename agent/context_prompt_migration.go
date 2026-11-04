@@ -1,0 +1,53 @@
+package agent
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"slices"
+)
+
+// SHA-256 of the previous code defaults; only exact matches are upgraded.
+var PreviousContextPromptHashes = map[string]string{
+	"mainagent": "12bb69ee0886c4fb9beb936d882021a91104860f1da69a5e3eda3d9e345cd399",
+	"worker":    "9cfe2314eccfa52e3e1fb5fb10f952e7a06a17e6f7fad3506e5b070d5569330d",
+	"planner":   "d64b844d07b8dd6edd8c70e66a76369a7b977278dce571618c54a6ea2c815972",
+	"auto":      "b2a71b82243607337b19f0642317fed88c144d536412d80eaaf90807f2905a1d",
+	"pentest":   "2444f4e8157ef93a7c6b900b062caf79bd2a90d49fda2566c10b8b3fb24fd43f",
+	"reporter":  "8803227805c947bef6bdb761ed5d60539645940f8af2a91348902ad476f944a1",
+}
+
+// IsLegacyReporterPrompt reports whether text is one of the known old reporter
+// defaults. A user-edited prompt is intentionally left alone; only exact old
+// defaults are safe to migrate to the fixed SRC report template.
+func IsLegacyReporterPrompt(text string) bool {
+	sum := sha256.Sum256([]byte(text))
+	h := hex.EncodeToString(sum[:])
+	if h == PreviousContextPromptHashes["reporter"] {
+		return true
+	}
+	return slices.Contains(PreviousToolContractPromptHashes["reporter"], h)
+}
+
+// Code defaults immediately before the tool documentation audit. Never derive
+// these from the current templates: that would silently skip upgraded installs.
+// b1549aff… is the reporter default immediately before the 2026-10-26 report
+// length-budget revision; reseedReporterPrompt v2 relies on it to upgrade
+// installs that already ran the v1 reseed.
+var PreviousToolContractPromptHashes = map[string][]string{
+	"mainagent": {"09742a82b10a359d9fe681abf4bb45fc671b6a3dd640efcf14a15b0315e30217"},
+	"planner":   {"00b7469a6a0a7419d9997983136c620efb7e994dae54fd9ca88241ed833917b0", "c549a5b26d070ccb6a4c2face9fc794a3d94cac0f2366088b0780c11adce28af"},
+	"auto":      {"8eec58f253f03172b8e48db159ec8a1cb5b001ee0e6f929f56782b239f3fa5d8"},
+	"reporter":  {"d95a892584a10ac8afb2434714601caa346e158f839785ff132d5424028fd628", "b1549affe3832f330d2d7a07857cec79b9b9df8b1ec47736f79ae18654013626"},
+}
+
+// Default shipped with 05c8e90, which enforced an in-run query receipt.
+var PreviousPlannerProactivePromptHashes = []string{
+	"ab074edd2c859623145f25ca9f5d7ca24d09f3e3eee9e20cf981f702971d7acf",
+}
+
+// Exact defaults from the proactive-query workflow and its prior query gate.
+// Custom templates are not rewritten; fixed runtime rules override old flow.
+var PreviousPlannerDirectDispatchPromptHashes = []string{
+	"8fb2c8c0151aa0c331a8bda21903d838768227f2741199584ea253f9080e9de6",
+	"ab074edd2c859623145f25ca9f5d7ca24d09f3e3eee9e20cf981f702971d7acf",
+}

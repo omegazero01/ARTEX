@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
 )
 
 // hasSkillTool reports whether the packed tool set contains the Skill meta-tool.
@@ -85,7 +85,7 @@ func TestAssembleVisibleSkill(t *testing.T) {
 	}
 
 	// AugmentTools appends extra to base without filtering base
-	combined, _, c2 := agent.AugmentTools(context.Background(), "planner", nil)
+	combined, _, c2 := augmentToolsForTest(t, context.Background(), "planner", nil)
 	defer c2()
 	if !hasSkillTool(combined) {
 		t.Fatalf("AugmentTools should surface the Skill meta-tool")

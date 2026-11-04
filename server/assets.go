@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,8 +9,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/neouks/series/db"
 )
 
 // companyScopeInputs accepts both the new [{kind,value}] contract and the
@@ -41,13 +43,14 @@ func (items *companyScopeInputs) UnmarshalJSON(data []byte) error {
 	for i, raw := range rawItems {
 		var legacy string
 		if err := json.Unmarshal(raw, &legacy); err == nil {
-			out = append(out, db.ScopeInput{Value: legacy})
+			out = append(out, db.ScopeInput{Value: legacy, Manual: true})
 			continue
 		}
 		var structured db.ScopeInput
 		if err := json.Unmarshal(raw, &structured); err != nil {
 			return fmt.Errorf("scope[%d] must be a string or {kind,value}", i)
 		}
+		structured.Manual = true
 		out = append(out, structured)
 	}
 	*items = out
@@ -323,6 +326,9 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	as = as.WithReadContext(ctx)
 	typ := q.Get("type")
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
@@ -334,6 +340,16 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
+	tested := q.Get("tested")
+	if tested != "" && tested != "all" && tested != "true" && tested != "false" {
+		writeErr(w, http.StatusBadRequest, "tested 必须是 all、true 或 false")
+		return
+	}
+	approval := q.Get("approval_state")
+	if approval != "" && approval != "all" && approval != "blocked" && approval != db.ApprovalApproved && approval != db.ApprovalPending && approval != db.ApprovalRevoked {
+		writeErr(w, http.StatusBadRequest, "approval_state 必须是 all、approved、pending、revoked 或 blocked")
+		return
+	}
 
 	assets := []*db.Asset{}
 	var err error
@@ -341,21 +357,25 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 	// beyond the last row can return an empty page without an expensive scan.
 	total := 0
 
+	taskID, _ := strconv.ParseInt(q.Get("task_id"), 10, 64)
 	if dsl := q.Get("dsl"); dsl != "" {
 		if err := db.ValidateDSL(dsl); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		// task_id scopes the DSL search to a task's assets (the task detail
-		// "测试资产" search); 0 means the global asset view.
-		taskID, _ := strconv.ParseInt(q.Get("task_id"), 10, 64)
-		total, err = as.CountDSL(dsl, typ, taskID)
-		if err == nil && offset < total {
-			assets, err = as.QueryDSL(dsl, typ, taskID, limit, offset)
+		if taskID > 0 {
+			total, err = as.CountDSLByTaskApproval(taskID, dsl, typ, tested, approval)
+			if err == nil && offset < total {
+				assets, err = as.QueryDSLByTaskApproval(taskID, dsl, typ, tested, approval, limit, offset)
+			}
+		} else {
+			total, err = as.CountDSL(dsl, typ, 0)
+			if err == nil && offset < total {
+				assets, err = as.QueryDSL(dsl, typ, 0, limit, offset)
+			}
 		}
 	} else {
 		companyID, _ := strconv.ParseInt(q.Get("company_id"), 10, 64)
-		taskID, _ := strconv.ParseInt(q.Get("task_id"), 10, 64)
 		switch {
 		case companyID > 0:
 			total, err = as.CountByCompany(companyID, typ)
@@ -363,9 +383,9 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 				assets, err = as.QueryByCompany(companyID, typ, limit, offset)
 			}
 		case taskID > 0:
-			total, err = as.CountByTask(taskID, typ)
+			total, err = as.CountByTaskApproval(taskID, typ, tested, approval)
 			if err == nil && offset < total {
-				assets, err = as.QueryByTask(taskID, typ, limit, offset)
+				assets, err = as.QueryByTaskApproval(taskID, typ, tested, approval, limit, offset)
 			}
 		default:
 			if typ == "" {
@@ -400,6 +420,9 @@ func (s *Server) assetCounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var counts map[string]int
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	as = as.WithReadContext(ctx)
 	var err error
 	if taskID, _ := strconv.ParseInt(r.URL.Query().Get("task_id"), 10, 64); taskID > 0 {
 		counts, err = as.CountsByTypeForTask(taskID)
@@ -506,43 +529,42 @@ func (s *Server) insertAssets(w http.ResponseWriter, r *http.Request) {
 	var errs []errEntry
 
 	for i, a := range req.Assets {
-		var id int64
-		var err error
-		switch a.Type {
-		case "root_domain":
-			id, err = as.UpsertRootDomain(db.UpsertRootDomainReq{Domain: a.Domain, ICP: a.ICP, TaskID: req.TaskID})
-		case "ip":
-			id, err = as.UpsertIP(db.UpsertIPReq{IP: a.IP, BoundDomains: a.BoundDomains, OpenPorts: a.OpenPorts, TaskID: req.TaskID})
-		case "subdomain":
-			id, err = as.UpsertSubdomain(db.UpsertSubdomainReq{Domain: a.Domain, RecordType: a.RecordType, RecordValue: a.RecordValue, ICP: a.ICP, TaskID: req.TaskID})
-		case "app":
-			id, err = as.UpsertApp(db.UpsertAppReq{Name: a.AppName, BundleID: a.BundleID, Category: a.Category, Description: a.Description, ICP: a.AppICP, TaskID: req.TaskID})
-		case "service":
-			if a.URL != "" {
+		id, err := as.RegisterUserAssetWithSource(req.TaskID, "api", "用户通过资产 API 登记", func(as *db.AssetStore) (int64, error) {
+			var id int64
+			var err error
+			switch a.Type {
+			case "root_domain":
+				id, err = as.UpsertRootDomain(db.UpsertRootDomainReq{Domain: a.Domain, ICP: a.ICP, TaskID: req.TaskID})
+			case "ip":
+				id, err = as.UpsertIP(db.UpsertIPReq{IP: a.IP, BoundDomains: a.BoundDomains, OpenPorts: a.OpenPorts, TaskID: req.TaskID})
+			case "subdomain":
+				id, err = as.UpsertSubdomain(db.UpsertSubdomainReq{Domain: a.Domain, RecordType: a.RecordType, RecordValue: a.RecordValue, ICP: a.ICP, TaskID: req.TaskID})
+			case "app":
+				id, err = as.UpsertApp(db.UpsertAppReq{Name: a.AppName, BundleID: a.BundleID, Category: a.Category, Description: a.Description, ICP: a.AppICP, TaskID: req.TaskID})
+			case "service":
+				if a.URL != "" {
+					svcIP := a.ServiceIP
+					if svcIP == "" {
+						svcIP = a.IP
+					}
+					id, err = as.UpsertHTTPService(db.UpsertHTTPServiceReq{URL: a.URL, Technologies: a.Technologies, StatusCode: a.StatusCode, ContentLength: a.ContentLength, PageTitle: a.PageTitle, FaviconMMH3: a.FaviconMMH3, Auth: a.Auth, IP: svcIP, TaskID: req.TaskID})
+				} else {
+					id, err = as.UpsertOtherService(db.UpsertOtherServiceReq{Domain: a.Domain, IP: a.IP, Port: a.Port, ServiceName: a.ServiceName, Auth: a.Auth, TaskID: req.TaskID})
+				}
+			case "endpoint":
 				svcIP := a.ServiceIP
 				if svcIP == "" {
 					svcIP = a.IP
 				}
-				id, err = as.UpsertHTTPService(db.UpsertHTTPServiceReq{URL: a.URL, Technologies: a.Technologies, StatusCode: a.StatusCode, ContentLength: a.ContentLength, PageTitle: a.PageTitle, FaviconMMH3: a.FaviconMMH3, Auth: a.Auth, IP: svcIP, TaskID: req.TaskID})
-			} else {
-				id, err = as.UpsertOtherService(db.UpsertOtherServiceReq{Domain: a.Domain, IP: a.IP, Port: a.Port, ServiceName: a.ServiceName, Auth: a.Auth, TaskID: req.TaskID})
+				id, err = as.UpsertEndpoint(db.UpsertEndpointReq{URL: a.URL, Method: a.Method, Params: a.Params, IP: svcIP, TaskID: req.TaskID})
+			default:
+				return 0, fmt.Errorf("unknown type: %s", a.Type)
 			}
-		case "endpoint":
-			svcIP := a.ServiceIP
-			if svcIP == "" {
-				svcIP = a.IP
-			}
-			id, err = as.UpsertEndpoint(db.UpsertEndpointReq{URL: a.URL, Method: a.Method, Params: a.Params, IP: svcIP, TaskID: req.TaskID})
-		default:
-			errs = append(errs, errEntry{Index: i, Error: "unknown type: " + a.Type})
-			continue
-		}
+			return id, err
+		})
 		if err != nil {
 			errs = append(errs, errEntry{Index: i, Error: err.Error()})
 			continue
-		}
-		if req.TaskID > 0 {
-			_ = as.SetTaskAssetSource(req.TaskID, id, "api", "通过资产 API 登记", nil)
 		}
 		results = append(results, result{Index: i, ID: id, Type: a.Type})
 	}

@@ -134,23 +134,80 @@ function Chips({ items, mono }: { items: string[]; mono?: boolean }) {
 function SourceCell({ asset }: { asset: Asset }) {
   const source = firstText([asset.task_source], "legacy");
   const summary = firstText([asset.task_source_summary], "由历史任务资产关联迁移，暂无更详细来源说明");
+  const derived = asset.type === "service" || asset.type === "endpoint";
+  let approvalBadge: React.ReactNode;
+  if (asset.blocked) {
+    approvalBadge = (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge variant="destructive" className="shrink-0">
+            {asset.block_direct ? "已封禁" : "继承封禁"}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent>{asset.block_reason ?? "该资产受当前任务删除墓碑影响，禁止再次测试"}</TooltipContent>
+      </Tooltip>
+    );
+  } else if (asset.approval_state === "pending") {
+    approvalBadge = (
+      <Badge variant="outline" className="shrink-0">
+        {derived ? "父资产待审批" : "待审批"}
+      </Badge>
+    );
+  } else if (asset.approval_state === "revoked") {
+    approvalBadge = (
+      <Badge variant="secondary" className="shrink-0">
+        {derived ? "父资产已撤回" : "已撤回"}
+      </Badge>
+    );
+  } else {
+    approvalBadge = (
+      <Badge variant="default" className="shrink-0">
+        {derived ? "继承父资产授权" : "已批准"}
+      </Badge>
+    );
+  }
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Badge variant="outline" className="max-w-28 shrink-0 font-normal">
-          <span className="truncate">{taskAssetSourceLabel(source)}</span>
-        </Badge>
-      </TooltipTrigger>
-      <TooltipContent side="left" align="start" className="max-w-sm">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span className="font-medium">{taskAssetSourceLabel(source)}</span>
-          <span className="[overflow-wrap:anywhere]">{summary}</span>
-          {asset.task_source_node_id ? (
-            <span className="font-mono opacity-80">来源节点 #{asset.task_source_node_id}</span>
-          ) : null}
-        </div>
-      </TooltipContent>
-    </Tooltip>
+    <div className="flex flex-wrap items-center gap-1.5">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge variant="outline" className="max-w-28 shrink-0 font-normal">
+            <span className="truncate">{taskAssetSourceLabel(source)}</span>
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent side="left" align="start" className="max-w-sm">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="font-medium">{taskAssetSourceLabel(source)}</span>
+            <span className="[overflow-wrap:anywhere]">{summary}</span>
+            {asset.task_source_node_id ? (
+              <span className="font-mono opacity-80">来源节点 #{asset.task_source_node_id}</span>
+            ) : null}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+      {asset.task_inherited ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="secondary" className="shrink-0">
+              来源任务 #{asset.task_source_task_id} · 只读
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent>授权状态由来源任务维护；当前任务只能将其排除，或手动重新关联为自己的资产。</TooltipContent>
+        </Tooltip>
+      ) : null}
+      {approvalBadge}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge variant={asset.tested ? "default" : "secondary"} className="shrink-0">
+            {asset.tested ? "已测试" : "未测试"}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent>
+          {asset.tested
+            ? `测试时间：${asset.tested_at ? new Date(asset.tested_at).toLocaleString() : "未知"}${asset.tested_by ? ` · Agent：${asset.tested_by}` : ""}`
+            : "尚未记录 Agent 对该任务资产的事实或漏洞发现"}
+        </TooltipContent>
+      </Tooltip>
+    </div>
   );
 }
 
@@ -309,7 +366,7 @@ function AddTaskAssetsSheet({
         <SheetHeader>
           <SheetTitle>新增测试资产</SheetTitle>
           <SheetDescription>
-            直接填写测试范围。域名和 IP 会创建或复用全局资产；CIDR、ICP 和关键词作为 Agent 范围上下文。
+            直接填写测试范围，支持 CIDR、IP、HTTP/URL、域名、证书、ICP 等信息；无法识别的内容保留原文。
           </SheetDescription>
         </SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4">
@@ -319,7 +376,6 @@ function AddTaskAssetsSheet({
             onValueChange={setScopeText}
             parsed={parsedScope}
             label="测试资产与范围"
-            description="每行一条，自动识别域名、IP、CIDR、ICP 备案和关键词。"
           />
         </div>
         <SheetFooter>
@@ -351,9 +407,16 @@ export function AssetsTab({ taskId }: { taskId: string }) {
   const [loading, setLoading] = React.useState(false);
   const [dslError, setDslError] = React.useState("");
   const [refreshKey, setRefreshKey] = React.useState(0);
+  const [testedFilter, setTestedFilter] = React.useState<"all" | "true" | "false">("all");
+  const [approvalFilter, setApprovalFilter] = React.useState<"all" | "approved" | "pending" | "revoked" | "blocked">(
+    "all",
+  );
   const [addOpen, setAddOpen] = React.useState(false);
   const [removeTarget, setRemoveTarget] = React.useState<Asset | null>(null);
   const [removing, setRemoving] = React.useState(false);
+  const [approvalTarget, setApprovalTarget] = React.useState<Asset | null>(null);
+  const approvalConfirmLabel = approvalTarget?.blocked ? "批准并恢复测试资格" : "确认撤回";
+  const [changingApproval, setChangingApproval] = React.useState(false);
   const assetsRequestRef = React.useRef(0);
   const dslMode = query.trim() !== "";
 
@@ -380,15 +443,18 @@ export function AssetsTab({ taskId }: { taskId: string }) {
     let active = true;
     const dsl = query.trim();
     const request = ++assetsRequestRef.current;
+    let inFlight = false;
     const load = async () => {
+      if (!active || inFlight) return;
+      inFlight = true;
       setLoading(true);
       try {
         // The search always stays within this task's assets: taskAssets and
         // searchTaskAssets both pin task_id server-side.
         const [current, nextCounts] = await Promise.all([
           dsl
-            ? api.searchTaskAssets(taskId, dsl, tab, size, page * size)
-            : api.taskAssets(taskId, tab, size, page * size),
+            ? api.searchTaskAssets(taskId, dsl, tab, size, page * size, testedFilter, approvalFilter)
+            : api.taskAssets(taskId, tab, size, page * size, testedFilter, approvalFilter),
           api.assetCounts(taskId),
         ]);
         if (!active || assetsRequestRef.current !== request) return;
@@ -407,6 +473,7 @@ export function AssetsTab({ taskId }: { taskId: string }) {
           toast.error(`加载任务资产失败：${message}`);
         }
       } finally {
+        inFlight = false;
         if (active && assetsRequestRef.current === request) {
           setLoading(false);
           setLoaded(true);
@@ -421,7 +488,7 @@ export function AssetsTab({ taskId }: { taskId: string }) {
       clearTimeout(debounce);
       clearInterval(timer);
     };
-  }, [page, query, refreshKey, size, tab, taskId]);
+  }, [approvalFilter, page, query, refreshKey, size, tab, taskId, testedFilter]);
 
   React.useEffect(() => {
     const maxPage = Math.max(0, Math.ceil(total / size) - 1);
@@ -448,20 +515,96 @@ export function AssetsTab({ taskId }: { taskId: string }) {
     }
   };
 
-  const removeButton = (asset: Asset) => (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      onClick={() => setRemoveTarget(asset)}
-      aria-label={`将资产 ${assetLabel(asset)} 移出任务`}
-      title="移出任务"
-    >
-      <Trash2Icon />
-    </Button>
-  );
+  const removeButton = (asset: Asset) => {
+    const derived = !["root_domain", "subdomain", "ip"].includes(asset.type);
+    let approvalAction: React.ReactNode = null;
+    if (asset.blocked && asset.block_direct && asset.block_kind === "manual" && !asset.task_read_only && !derived) {
+      approvalAction = (
+        <Button size="xs" variant="outline" disabled={changingApproval} onClick={() => setApprovalTarget(asset)}>
+          批准
+        </Button>
+      );
+    } else if (asset.blocked && asset.block_direct) {
+      approvalAction = (
+        <Button size="xs" variant="outline" disabled={changingApproval} onClick={() => void restoreAsset(asset)}>
+          {changingApproval ? <Spinner data-icon="inline-start" /> : null}
+          重新关联
+        </Button>
+      );
+    } else if (asset.blocked) {
+      approvalAction = <span className="text-muted-foreground text-xs">由父资产封禁</span>;
+    } else if (!derived && !asset.task_read_only && asset.approval_state === "pending") {
+      approvalAction = (
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={changingApproval}
+          onClick={() => void changeApproval(asset, true)}
+        >
+          批准
+        </Button>
+      );
+    } else if (!derived && !asset.task_read_only && asset.approval_state === "approved") {
+      approvalAction = (
+        <Button size="xs" variant="ghost" disabled={changingApproval} onClick={() => setApprovalTarget(asset)}>
+          撤回
+        </Button>
+      );
+    }
+    return (
+      <div className="flex items-center gap-1">
+        {approvalAction}
+        {!asset.blocked || !asset.block_direct || asset.block_kind === "manual" ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={removing}
+            onClick={() => setRemoveTarget(asset)}
+            aria-label={`将资产 ${assetLabel(asset)} 移出任务`}
+            title={asset.task_inherited ? "从当前任务排除" : "移出任务"}
+          >
+            <Trash2Icon />
+          </Button>
+        ) : null}
+      </div>
+    );
+  };
+
+  const changeApproval = async (asset: Asset, approve: boolean) => {
+    setChangingApproval(true);
+    try {
+      if (approve) await api.approveTaskAssets(taskId, [asset.id]);
+      else await api.revokeTaskAssets(taskId, [asset.id]);
+      toast.success(approve ? "资产已批准" : "资产已撤回，相关 Worker 将停止");
+      refresh();
+    } catch (reason) {
+      toast.error(`审批操作失败：${String((reason as Error)?.message ?? reason)}`);
+    } finally {
+      setChangingApproval(false);
+    }
+  };
+
+  const restoreAsset = async (asset: Asset) => {
+    setChangingApproval(true);
+    try {
+      await api.attachTaskAssets(taskId, [asset.id], "用户在任务资产页重新关联");
+      toast.success("资产已重新关联并批准，删除封禁已解除");
+      refresh();
+    } catch (reason) {
+      toast.error(`重新关联失败：${String((reason as Error)?.message ?? reason)}`);
+    } finally {
+      setChangingApproval(false);
+    }
+  };
 
   const commonCardProps = { loaded, onPage: setPage, onSize: setSize, page, size, total };
   const totalAll = TABS.reduce((sum, item) => sum + (counts[item.key] ?? 0), 0);
+  let removeDescription = "";
+  if (removeTarget?.task_inherited) {
+    removeDescription = `将来源任务资产“${assetLabel(removeTarget)}”从当前任务排除。`;
+  } else if (removeTarget) {
+    removeDescription = `将“${assetLabel(removeTarget)}”从当前任务的测试资产中移出。`;
+  }
 
   const searchBox = (
     <AssetDslSearch
@@ -480,10 +623,50 @@ export function AssetsTab({ taskId }: { taskId: string }) {
           <h2 className="font-medium text-sm">测试资产</h2>
           <p className="text-muted-foreground text-xs">当前任务共关联 {totalAll} 项资产</p>
         </div>
-        <Button size="sm" onClick={() => setAddOpen(true)}>
-          <PlusIcon data-icon="inline-start" />
-          新增测试资产
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={testedFilter}
+            onValueChange={(value) => {
+              setTestedFilter(value as typeof testedFilter);
+              setPage(0);
+            }}
+          >
+            <SelectTrigger size="sm" className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">全部状态</SelectItem>
+                <SelectItem value="false">未测试</SelectItem>
+                <SelectItem value="true">已测试</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Select
+            value={approvalFilter}
+            onValueChange={(value) => {
+              setApprovalFilter(value as typeof approvalFilter);
+              setPage(0);
+            }}
+          >
+            <SelectTrigger size="sm" className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">全部审批</SelectItem>
+                <SelectItem value="pending">待审批</SelectItem>
+                <SelectItem value="approved">已批准</SelectItem>
+                <SelectItem value="revoked">已撤回</SelectItem>
+                <SelectItem value="blocked">已封禁</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Button size="sm" onClick={() => setAddOpen(true)}>
+            <PlusIcon data-icon="inline-start" />
+            新增测试资产
+          </Button>
+        </div>
       </div>
 
       <Tabs
@@ -682,8 +865,11 @@ export function AssetsTab({ taskId }: { taskId: string }) {
           <AlertDialogHeader>
             <AlertDialogTitle>移出当前任务？</AlertDialogTitle>
             <AlertDialogDescription className="[overflow-wrap:anywhere]">
-              {removeTarget ? `将“${assetLabel(removeTarget)}”从当前任务的测试资产中移出。` : ""}
-              全局资产、关联流量和历史黑板锚点会继续保留。
+              {removeDescription}
+              {removeTarget && ["root_domain", "subdomain", "ip"].includes(removeTarget.type)
+                ? "删除主机将立即停止相关 Worker，并禁止再次测试该主机及其端口、服务和接口；重新关联后恢复。"
+                : "仅移除此记录的展示，不改变主机授权，不限制端口、服务或接口测试。"}
+              全局资产和历史记录会继续保留。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -698,6 +884,41 @@ export function AssetsTab({ taskId }: { taskId: string }) {
             >
               {removing ? <Spinner data-icon="inline-start" /> : <Trash2Icon data-icon="inline-start" />}
               {removing ? "移出中" : "确认移出"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(approvalTarget)}
+        onOpenChange={(open) => !open && !changingApproval && setApprovalTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {approvalTarget?.blocked ? "批准并解除主动封禁？" : "撤回资产测试授权？"}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="[overflow-wrap:anywhere]">
+              {approvalTarget?.blocked
+                ? `将批准“${assetLabel(approvalTarget)}”并解除自身主动封禁，恢复测试资格；父资产封禁不会解除。`
+                : `将撤回“${approvalTarget ? assetLabel(approvalTarget) : ""}”的测试授权。当前任务中命中该资产的运行中 Worker 会立即停止，后续测试也会被阻止。`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={changingApproval}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant={approvalTarget?.blocked ? "default" : "destructive"}
+              disabled={changingApproval || !approvalTarget}
+              onClick={(event) => {
+                event.preventDefault();
+                if (approvalTarget)
+                  void changeApproval(approvalTarget, Boolean(approvalTarget.blocked)).then(() =>
+                    setApprovalTarget(null),
+                  );
+              }}
+            >
+              {changingApproval ? <Spinner data-icon="inline-start" /> : null}
+              {changingApproval ? "处理中" : approvalConfirmLabel}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

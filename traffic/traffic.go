@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -30,10 +31,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/norma/permission"
+	"github.com/klauspost/compress/zstd"
+
 	actool "github.com/Autumn-27/norma/tool"
 	mproxy "github.com/lqqyt2423/go-mitmproxy/proxy"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/guard"
 	_ "modernc.org/sqlite"
 )
 
@@ -131,7 +134,7 @@ const (
 // TrafficSearchDescription is persisted into the tool catalog for new and
 // upgraded installations. Keep it in the traffic package so the runtime tool
 // and the catalog migration cannot drift apart.
-const TrafficSearchDescription = "查询记录代理已抓取的目标流量（必须指定 host；支持裸主机、主机:端口或完整 URL，可再按 URL 子串或正文关键词过滤）。指定端口时只返回该服务的流量，避免同一 IP 的不同端口串包。body_contains 会在已抓取的请求/响应头与正文中做全文搜索，支持任意子串和中文（至少 3 个字符）。仅返回极轻量索引(id/method/url/status/resp_len)，不含响应内容；结果非空后必须用 traffic_get 逐条核实请求/响应，再把确实支持当前漏洞的 ID 交给 bind_finding_traffic。默认只返回 3 条、每页最多 10 条；结果多时用 page 翻页。"
+const TrafficSearchDescription = "按指定主机检索已捕获流量，支持URL、正文、方法、状态码和时间过滤。只返回元数据，需 traffic_get 核实证据。正文索引最多4MiB/侧且排除二进制；无结果不代表完整报文中不存在。默认3条、最多10条，next_cursor续页。"
 
 // Traffic runs the recording proxy and owns the file tree + index.
 type Traffic struct {
@@ -169,7 +172,60 @@ type Traffic struct {
 	// through (nil = dial targets directly). Both the intercepted and the
 	// transparent-passthrough paths honor it (go-mitmproxy's getUpstreamConn),
 	// so no host escapes it. Hot-swappable at runtime via SetUpstreamProxy.
-	upstream atomic.Pointer[url.URL]
+	upstream  atomic.Pointer[url.URL]
+	assets    *db.AssetStore
+	recording atomic.Bool
+	// skipStaticOn + skipRules gate recording of front-end static assets
+	// (HTML/JS/CSS/images/fonts/media), which dominate capture volume while
+	// rarely being what a pentest replays or searches. Hot-swappable from
+	// settings via SetSkipStatic / SetSkipRules.
+	skipStaticOn       atomic.Bool
+	skipRules          atomic.Value // []string
+	retentionDays      atomic.Int64
+	retentionDone      chan struct{}
+	retentionGC        atomic.Bool
+	retentionGCPending atomic.Bool
+	blobCacheMu        sync.Mutex
+	blobCache          []cachedBlob
+	// smart decides per request whether traffic to a host should exit via the
+	// proxy pool instead of dialing directly. Nil until SetSmartProxy is called;
+	// when nil or disabled the upstream callback keeps the legacy behaviour.
+	smart *SmartProxy
+}
+
+type cachedBlob struct {
+	hash string
+	data []byte
+}
+
+const maxCachedBlob = 8 << 20
+
+func (t *Traffic) cachedBlob(hash string) []byte {
+	t.blobCacheMu.Lock()
+	defer t.blobCacheMu.Unlock()
+	for _, entry := range t.blobCache {
+		if entry.hash == hash {
+			return entry.data // immutable after insertion
+		}
+	}
+	return nil
+}
+
+func (t *Traffic) cacheBlob(hash string, data []byte) {
+	if len(data) == 0 || len(data) > maxCachedBlob {
+		return
+	}
+	t.blobCacheMu.Lock()
+	defer t.blobCacheMu.Unlock()
+	for _, entry := range t.blobCache {
+		if entry.hash == hash {
+			return
+		}
+	}
+	t.blobCache = append(t.blobCache, cachedBlob{hash: hash, data: data})
+	if len(t.blobCache) > 2 {
+		t.blobCache = t.blobCache[1:]
+	}
 }
 
 // Open initializes the traffic tree, blob store and SQLite index under dir.
@@ -195,11 +251,14 @@ func Open(dir, addr string) (*Traffic, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &Traffic{dir: dir, addr: addr, db: db, closed: make(chan struct{})}
+	t := &Traffic{dir: dir, addr: addr, db: db, closed: make(chan struct{}), retentionDone: make(chan struct{})}
 	if err := t.initIndex(); err != nil {
 		db.Close()
 		return nil, err
 	}
+	t.recording.Store(true)
+	t.skipStaticOn.Store(true)
+	t.skipRules.Store([]string(DefaultSkipStaticRules))
 
 	p, err := mproxy.NewProxy(&mproxy.Options{
 		Addr:        addr,
@@ -218,7 +277,7 @@ func Open(dir, addr string) (*Traffic, error) {
 	// a direct dial. When a global egress proxy IS configured (SetUpstreamProxy),
 	// every captured request — intercepted AND transparently tunneled — is
 	// forwarded through it instead, so no host leaks the real source IP.
-	p.SetUpstreamProxy(func(*http.Request) (*url.URL, error) { return t.upstream.Load(), nil })
+	p.SetUpstreamProxy(t.chooseUpstream)
 	// Fail-open: MITM every host by default, EXCEPT ones a prior request proved we
 	// can't intercept without breaking (see maybePassthrough). Those are tunneled
 	// transparently so the request still reaches the target instead of being killed.
@@ -226,8 +285,14 @@ func Open(dir, addr string) (*Traffic, error) {
 		_, tunnel := t.pass.Load(hostOnly(req.Host))
 		return !tunnel
 	})
+	// Task-bound agents put a signed task tag in the proxy credentials. This
+	// callback runs before the proxy opens the target connection (including
+	// CONNECT), providing a network-layer backstop for stale/model-bypassed tool
+	// inputs. Untagged traffic (independent chat, enrichment, UI) is unchanged.
+	p.SetAuthProxy(t.authorizeTaskRequest)
 	p.AddAddon(&sink{t: t})
 	t.proxy = p
+	go func() { defer close(t.retentionDone); t.retentionLoop() }()
 	return t, nil
 }
 
@@ -309,6 +374,246 @@ func (t *Traffic) ProxyAddr() string {
 	return "http://" + t.addr
 }
 
+// SetAssetPolicyStore enables task authorization at the recording proxy edge.
+func (t *Traffic) SetAssetPolicyStore(store *db.AssetStore) { t.assets = store }
+
+// SetRecordingEnabled controls persistence without stopping the proxy. This
+// lets task agents keep the authorization backstop when traffic capture is off.
+func (t *Traffic) SetRecordingEnabled(enabled bool) { t.recording.Store(enabled) }
+
+// DefaultSkipStaticRules lists what "static asset" means when the operator has
+// not customized the list. Content-type families end with "/" and match by
+// prefix; entries starting with "." match the URL path's extension; everything
+// else matches the response content-type exactly or as a subtype marker
+// ("javascript" covers application/javascript, text/javascript, …).
+var DefaultSkipStaticRules = []string{
+	"text/html", "text/css", "javascript", "ecmascript",
+	"image/", "audio/", "video/", "font/",
+	".html", ".htm", ".js", ".mjs", ".css", ".map",
+	".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".bmp", ".ico",
+	".woff", ".woff2", ".ttf", ".otf", ".eot",
+	".mp4", ".webm", ".mp3", ".wav",
+}
+
+// SetSkipStatic toggles static-asset filtering without touching the rule list.
+func (t *Traffic) SetSkipStatic(enabled bool) { t.skipStaticOn.Store(enabled) }
+
+// SetSkipRules replaces the static-asset rule list. Entries are normalized
+// (lowercased, trimmed); an empty list keeps the built-in default.
+func (t *Traffic) SetSkipRules(rules []string) {
+	normalized := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if r = strings.ToLower(strings.TrimSpace(r)); r != "" {
+			normalized = append(normalized, r)
+		}
+	}
+	if len(normalized) == 0 {
+		normalized = []string(DefaultSkipStaticRules)
+	}
+	t.skipRules.Store(normalized)
+}
+
+// SkipRules reports the effective rule list (for the settings UI).
+func (t *Traffic) SkipRules() []string {
+	rules, _ := t.skipRules.Load().([]string)
+	return rules
+}
+
+// RetentionDays reports the retention window in days (0 = keep forever).
+func (t *Traffic) RetentionDays() int64 { return t.retentionDays.Load() }
+
+// shouldSkipStatic reports whether one completed exchange is a front-end static
+// asset not worth recording. The response content-type decides; the request's
+// URL extension is the fallback for mislabeled servers.
+func (t *Traffic) shouldSkipStatic(f *mproxy.Flow) bool {
+	if !t.skipStaticOn.Load() {
+		return false
+	}
+	rules, _ := t.skipRules.Load().([]string)
+	if len(rules) == 0 {
+		return false
+	}
+	ct := strings.ToLower(strings.TrimSpace(f.Response.Header.Get("Content-Type")))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	ext := strings.ToLower(path.Ext(f.Request.URL.Path))
+	for _, rule := range rules {
+		switch {
+		case strings.HasSuffix(rule, "/"):
+			if strings.HasPrefix(ct, rule) {
+				return true
+			}
+		case strings.HasPrefix(rule, "."):
+			if ext == rule {
+				return true
+			}
+		default:
+			if ct == rule || strings.Contains(ct, rule) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// SetRetention bounds how long recorded exchanges stay on disk. Zero disables
+// the sweeper (keep forever).
+func (t *Traffic) SetRetention(days int64) {
+	if days < 0 || days > 3650 {
+		return
+	}
+	t.retentionDays.Store(days)
+}
+
+// retentionLoop drops exchanges older than the retention window once an hour.
+// Deletion reuses the same four-table path and background reclamation as a
+// manual host delete, so space is actually returned to the filesystem.
+func (t *Traffic) retentionLoop() {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-t.closed:
+			return
+		case <-ticker.C:
+			days := t.retentionDays.Load()
+			if days <= 0 {
+				continue
+			}
+			if days > 3650 { // defense against a corrupt runtime setting
+				log.Printf("[traffic] 无效保留期 %d 天，跳过清理", days)
+				continue
+			}
+			cutoff := time.Now().UTC().AddDate(0, 0, -int(days)).Unix()
+			if n, err := t.DeleteOlderThan(cutoff); err != nil {
+				log.Printf("[traffic] 保留期清理失败：%v", err)
+			} else if n > 0 {
+				log.Printf("[traffic] 保留期 %d 天：清理 %d 条过期流量", days, n)
+			}
+		}
+	}
+}
+
+// DeleteOlderThan removes every exchange recorded before the unix cutoff and
+// returns how many went away. Reclamation and blob GC run in the background
+// afterwards, exactly like DeleteHost.
+func (t *Traffic) DeleteOlderThan(cutoff int64) (int64, error) {
+	const batchSize = 500
+	var total int64
+	defer func() {
+		if total > 0 {
+			t.scheduleRetentionCleanup()
+		}
+	}()
+	for !t.stopping() {
+		t.wmu.Lock()
+		tx, err := t.db.Begin()
+		if err != nil {
+			t.wmu.Unlock()
+			return total, err
+		}
+		// Every subquery sees the same oldest bounded window inside this
+		// transaction. The recorder gets the write lock back between batches.
+		n, err := t.deleteWhere(tx, "id IN (SELECT id FROM exchanges WHERE ts<? ORDER BY ts,id LIMIT ?)", cutoff, batchSize)
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+		t.wmu.Unlock()
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if n < batchSize {
+			break
+		}
+	}
+	return total, nil
+}
+
+func (t *Traffic) scheduleRetentionCleanup() {
+	if !t.retentionGC.CompareAndSwap(false, true) {
+		t.retentionGCPending.Store(true)
+		return
+	}
+	t.reaping.Go(func() {
+		for {
+			t.retentionGCPending.Store(false)
+			t.reclaim()
+			if !t.stopping() {
+				if err := t.gcBlobsBatched(); err != nil {
+					log.Printf("[traffic] 过期流量 blob 清理失败：%v", err)
+				}
+			}
+			if !t.stopping() && t.retentionGCPending.Load() {
+				continue
+			}
+			t.retentionGC.Store(false)
+			// A deletion racing the final store still gets its own pass. If
+			// another pass already started, that pass owns the pending work.
+			if !t.stopping() && t.retentionGCPending.Swap(false) && t.retentionGC.CompareAndSwap(false, true) {
+				continue
+			}
+			return
+		}
+	})
+}
+
+func (t *Traffic) authorizeTaskRequest(_ http.ResponseWriter, req *http.Request) (bool, error) {
+	taskID, scope, tagged, err := guard.ParseTaskProxyScope(req.Header.Get("Proxy-Authorization"))
+	if err != nil {
+		return false, err
+	}
+	if !tagged {
+		return true, nil
+	}
+	// Propagate the identity to the upstream callback BEFORE the credential is
+	// consumed below: that callback runs later and can no longer read the header.
+	// In-place assignment is required (verified experimentally).
+	if t.smart != nil {
+		WithTaskID(req, taskID)
+	}
+	// Consume the internal tag; it must never reach the target or traffic log.
+	req.Header.Del("Proxy-Authorization")
+	if t.assets == nil {
+		return true, nil
+	}
+	host := ""
+	if req.URL != nil {
+		host = req.URL.Hostname()
+	}
+	if host == "" {
+		host = hostOnly(req.Host)
+	}
+	validate := t.assets.ValidateTaskHostsApproved
+	if scope == "mainagent" {
+		validate = t.assets.ValidateWorkerHosts
+	}
+	if intent := guard.WorkerScopeIntent(scope); intent > 0 {
+		if err := t.assets.RememberWorkerAccess(taskID, intent, []string{host}, nil); err != nil {
+			return false, err
+		}
+		validate = t.assets.ValidateWorkerHosts
+	}
+	if err := validate(taskID, []string{host}); err != nil {
+		rows, saveErr := t.assets.RememberTaskAssetDenials(taskID, []string{host}, nil, scope)
+		if saveErr != nil {
+			log.Printf("[traffic] task %d 跳过记录失败: %v", taskID, saveErr)
+		}
+		if len(rows) == 0 || rows[0].Attempts == 1 {
+			log.Printf("[traffic] task %d blocked egress to %s: %v", taskID, host, err)
+		}
+		message := db.TaskAssetSkipMessage(rows)
+		if message == "" {
+			message = "跳过本项资源，继续其他已授权测试，不要重试。"
+		}
+		return false, fmt.Errorf("任务资产执行被阻止: %w。%s", err, message)
+	}
+	return true, nil
+}
+
 // SetUpstreamProxy points every captured request at a global egress proxy
 // (http/https/socks5, optional user:pass in the URL). An empty raw string clears
 // it, restoring direct dialing. The change is atomic and takes effect on the next
@@ -326,6 +631,43 @@ func (t *Traffic) SetUpstreamProxy(raw string) error {
 	t.upstream.Store(u)
 	return nil
 }
+
+// chooseUpstream resolves which egress a captured request should use.
+//
+// Priority (matches the design doc, and is pinned by unit tests):
+//  1. smart proxy enabled AND this task marked this host → the proxy pool
+//  2. a global egress proxy is configured               → that proxy
+//  3. neither applies                                   → nil (direct dial)
+//
+// Step 2 is easy to lose: an earlier version returned nil immediately after the
+// smart check failed, which silently bypassed a configured global proxy whenever
+// the smart switch was on — while the settings UI still claimed the global proxy
+// was in effect. Keeping this as a named method makes that regression testable.
+//
+// Verified experimentally: this single callback covers BOTH plain HTTP and
+// HTTPS (both paths converge on proxy.getUpstreamProxyUrl). For HTTPS it fires
+// once per CONNECT, i.e. the decision is connection-scoped.
+func (t *Traffic) chooseUpstream(req *http.Request) (*url.URL, error) {
+	if t.smart != nil && t.smart.Enabled() {
+		host := hostOnly(req.Host)
+		if host == "" && req.URL != nil {
+			host = req.URL.Hostname()
+		}
+		if u, ok := t.smart.ShouldProxy(TaskIDFrom(req), host); ok {
+			return u, nil
+		}
+		// Not marked → fall through to the global proxy below.
+	}
+	return t.upstream.Load(), nil
+}
+
+// SetSmartProxy installs the per-request proxy selector. Nil disables the
+// feature and restores the legacy single-upstream behaviour.
+func (t *Traffic) SetSmartProxy(s *SmartProxy) { t.smart = s }
+
+// SmartProxy exposes the installed selector (nil when unset), so callers can
+// inspect or persist the marks.
+func (t *Traffic) SmartProxy() *SmartProxy { return t.smart }
 
 // ValidateProxyURL parses and checks a proxy URL (http/https/socks5, optional
 // user:pass), returning the parsed URL. Exposed so callers can validate a global
@@ -346,7 +688,44 @@ func ValidateProxyURL(raw string) (*url.URL, error) {
 	if u.Host == "" {
 		return nil, fmt.Errorf("代理 %q 缺少主机地址", raw)
 	}
+	// Guard the most common misconfiguration FIRST, so the message names the real
+	// mistake: pasting a provider's "get an exit IP" API endpoint instead of the
+	// proxy endpoint. Such URLs carry an API-looking path and/or known query keys
+	// (secret_id/token/signature). Checking this before the port test matters,
+	// because those endpoints usually also omit the port — reporting "missing
+	// port" would send the user chasing the wrong problem.
+	if u.Path != "" && u.Path != "/" || looksLikeProviderAPI(u.RawQuery) {
+		return nil, fmt.Errorf("代理 %q 看起来是「取 IP 的 API 地址」而非代理服务器地址；"+
+			"请填 协议://[账号:密码@]主机:端口（例如 socks5://user:pass@host:15818）", raw)
+	}
+	// A proxy address must name a host AND a port. Reproduced experimentally: a
+	// URL without a port parses fine but makes go-mitmproxy's dial fail instantly
+	// with "missing port in address", surfacing to agents as an empty 502 within
+	// milliseconds — indistinguishable from a WAF block, so a malformed proxy
+	// config looks like an unreachable target. Catch it here instead.
+	if _, _, err := net.SplitHostPort(u.Host); err != nil {
+		return nil, fmt.Errorf("代理 %q 缺少端口(应形如 协议://[账号:密码@]主机:端口)", raw)
+	}
 	return u, nil
+}
+
+// looksLikeProviderAPI reports whether a query string carries the credential
+// keys used by proxy providers' "get exit IP" endpoints (快代理 gettps,
+// 芝麻/讯代理 etc.), which is a strong signal the user pasted the wrong URL.
+func looksLikeProviderAPI(rawQuery string) bool {
+	if rawQuery == "" {
+		return false
+	}
+	q, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return false
+	}
+	for _, k := range []string{"secret_id", "secret_key", "signature", "format", "sep", "num"} {
+		if _, ok := q[k]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // CACertPath returns the PEM CA cert clients must trust to verify HTTPS through
@@ -366,6 +745,9 @@ func (t *Traffic) Start() error { return t.proxy.Start() }
 func (t *Traffic) Close() error {
 	if t.closed != nil {
 		t.closeOnce.Do(func() { close(t.closed) })
+	}
+	if t.retentionDone != nil {
+		<-t.retentionDone
 	}
 	t.reaping.Wait()
 	return t.db.Close()
@@ -390,7 +772,10 @@ type sink struct {
 }
 
 func (s *sink) Response(f *mproxy.Flow) {
-	if f.Request == nil || f.Response == nil {
+	if !s.t.recording.Load() || f.Request == nil || f.Response == nil {
+		return
+	}
+	if s.t.shouldSkipStatic(f) {
 		return
 	}
 	s.t.record(f)
@@ -449,10 +834,16 @@ func (t *Traffic) record(f *mproxy.Flow) {
 	url := f.Request.URL.String()
 	reqHead := fmt.Sprintf("%s %s %s\n%s", method, f.Request.URL.RequestURI(), f.Request.Proto, requestHeaderLines(f.Request))
 	respHead := fmt.Sprintf("HTTP %d\n%s", f.Response.StatusCode, headerLines(f.Response.Header))
+	// Store the bytes exactly as captured, but use the decoded view for text
+	// detection, previews and the full-text index. Content-Encoding is often
+	// br/gzip/zstd, and indexing or showing the compressed bytes as text makes
+	// otherwise readable API responses useless.
+	reqIndex := decodeHTTPBody(reqHead, f.Request.Body)
+	respIndex := decodeHTTPBody(respHead, f.Response.Body)
 	// Bodies are spilled before the transaction opens: blob writes are filesystem
 	// work and must not sit inside the SQLite write lock.
-	reqB := t.spill(f.Request.Body, f.Request.Header.Get("Content-Type"))
-	respB := t.spill(f.Response.Body, ct)
+	reqB := t.spillWithIndex(f.Request.Body, f.Request.Header.Get("Content-Type"), reqIndex)
+	respB := t.spillWithIndex(f.Response.Body, ct, respIndex)
 
 	tx, err := t.db.Begin()
 	if err != nil {
@@ -522,41 +913,72 @@ type storedBody struct {
 // written to the content-addressed store and keep a readable preview inline so a
 // reader can identify them without fetching the blob. Either way, text bodies
 // are handed to the full-text index in full (up to maxIndexBody) — indexing is
-// independent of where the bytes end up.
+// independent of where the bytes end up, and both storage forms are compressed
+// (see compress.go) while the index still gets the in-memory plaintext.
 func (t *Traffic) spill(body []byte, contentType string) storedBody {
+	return t.spillWithIndex(body, contentType, body)
+}
+
+// spillWithIndex stores body exactly as captured while using indexBody (the
+// Content-Encoding-decoded view) for text detection, previews and the full-text
+// index. Keeping the raw bytes preserves evidence/replay fidelity; decoding only
+// the index and preview makes compressed JSON searchable and readable.
+func (t *Traffic) spillWithIndex(body []byte, contentType string, indexBody []byte) storedBody {
 	if len(body) == 0 {
 		return storedBody{}
 	}
-	text := !isBinaryBody(contentType, body)
+	if len(indexBody) == 0 {
+		indexBody = body
+	}
+	text := !isBinaryBody(contentType, indexBody)
 	indexText := func() string {
 		if !text {
 			return ""
 		}
-		return string(clipBytes(body, maxIndexBody))
+		return string(clipBytes(indexBody, maxIndexBody))
+	}
+	preview := func() []byte {
+		if text {
+			return []byte(truncateUTF8(indexBody, blobPreview))
+		}
+		return clipBytes(body, blobPreview)
 	}
 	if len(body) <= maxInlineBody {
-		return storedBody{inline: body, index: indexText()}
+		return storedBody{inline: compressInline(body), index: indexText()}
 	}
 
 	sum := sha256.Sum256(body)
 	h := hex.EncodeToString(sum[:])
 	// One bucket level (256 buckets) is enough to keep any single directory small;
 	// the store only ever holds bodies above maxInlineBody, deduplicated by hash.
+	// The hash names the plaintext, so a compressed frame and a raw copy of the
+	// same body are one identity and either extension satisfies a lookup.
 	blobDir := filepath.Join(t.dir, "_blobs", "sha256", h[:2])
 	if err := os.MkdirAll(blobDir, 0o755); err != nil {
 		log.Printf("[traffic] 创建 blob 目录失败：%v", err)
-		return storedBody{inline: clipBytes(body, blobPreview), index: indexText()}
+		return storedBody{inline: compressInline(preview()), index: indexText()}
 	}
-	blobPath := filepath.Join(blobDir, h+".bin")
+	packed, compressed := encodeBlob(body)
+	ext := ".bin"
+	if compressed {
+		ext = ".zst"
+	}
+	other := ".zst"
+	if compressed {
+		other = ".bin"
+	}
+	blobPath := filepath.Join(blobDir, h+ext)
 	if _, err := os.Stat(blobPath); os.IsNotExist(err) {
-		if err := os.WriteFile(blobPath, body, 0o644); err != nil {
-			log.Printf("[traffic] 写 blob %s 失败：%v", h, err)
-			return storedBody{inline: clipBytes(body, blobPreview), index: indexText()}
+		if _, altErr := os.Stat(filepath.Join(blobDir, h+other)); altErr != nil {
+			if err := os.WriteFile(blobPath, packed, 0o644); err != nil {
+				log.Printf("[traffic] 写 blob %s 失败：%v", h, err)
+				return storedBody{inline: compressInline(preview()), index: indexText()}
+			}
 		}
 	}
 	sb := storedBody{hash: h, index: indexText()}
 	if text {
-		sb.inline = []byte(truncateUTF8(body, blobPreview))
+		sb.inline = compressInline(preview())
 	} else {
 		sb.inline = []byte(binaryTag(contentType, body))
 	}
@@ -681,9 +1103,10 @@ func sanitize(s string) string {
 
 var blobHashRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// blobPath locates a stored blob. Current writes use one bucket level; blobs
-// written before that change used two, so both layouts are probed rather than
-// migrated.
+// blobPath locates a stored blob. Current writes use one bucket level and a
+// compressed ".zst" extension (raw ".bin" when the body does not compress);
+// blobs written before either change used two levels and ".bin", so all
+// layouts are probed rather than migrated.
 func (t *Traffic) blobPath(hash string) (string, error) {
 	hash = strings.ToLower(strings.TrimSpace(hash))
 	// Validated as pure hex before touching the filesystem, so a crafted hash can
@@ -692,6 +1115,7 @@ func (t *Traffic) blobPath(hash string) (string, error) {
 		return "", fmt.Errorf("非法的 blob hash")
 	}
 	for _, p := range []string{
+		filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash+".zst"),
 		filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash+".bin"),
 		filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash[2:4], hash+".bin"),
 	} {
@@ -702,10 +1126,43 @@ func (t *Traffic) blobPath(hash string) (string, error) {
 	return "", fmt.Errorf("blob %s 不存在", hash)
 }
 
-// Blob opens a spilled body for streaming; the caller must close the file.
-// Streaming matters here: the driver exposes no incremental BLOB API, so keeping
-// large bodies on disk is what lets them be served without loading them whole.
-func (t *Traffic) Blob(hash string) (*os.File, int64, error) {
+// readBlobBytes loads one blob as plaintext: ".zst" frames are decoded, legacy
+// ".bin" files pass through. Bodies above the proxy's streaming threshold are
+// never recorded, so the decoded size is bounded (~5MiB) and holding it in
+// memory for a reader is safe.
+func (t *Traffic) readBlobBytes(hash string) ([]byte, error) {
+	p, err := t.blobPath(hash)
+	if err != nil {
+		return nil, err
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return nil, err
+	}
+	if st.Size() > maxBlobBody {
+		return nil, fmt.Errorf("blob exceeds %d bytes", maxBlobBody)
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil, err
+	}
+	return decodeBlob(data, strings.HasSuffix(p, ".zst"))
+}
+
+// Blob exposes a spilled body as plaintext for streaming; the caller must
+// close the reader.
+func (t *Traffic) Blob(hash string) (io.ReadCloser, int64, error) {
+	data, err := t.readBlobBytes(hash)
+	if err != nil {
+		return nil, 0, err
+	}
+	return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
+}
+
+// BlobRange reads at most length bytes of a blob from offset, and reports the
+// blob's total size. Used by the agent tool to page through a large body without
+// pulling all of it into the model's context.
+func (t *Traffic) BlobRange(hash string, offset, length int64) (data []byte, total int64, err error) {
 	p, err := t.blobPath(hash)
 	if err != nil {
 		return nil, 0, err
@@ -714,38 +1171,82 @@ func (t *Traffic) Blob(hash string) (*os.File, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	st, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, 0, err
-	}
-	return f, st.Size(), nil
-}
-
-// BlobRange reads at most length bytes of a blob from offset, and reports the
-// blob's total size. Used by the agent tool to page through a large body without
-// pulling all of it into the model's context.
-func (t *Traffic) BlobRange(hash string, offset, length int64) (data []byte, total int64, err error) {
-	f, size, err := t.Blob(hash)
-	if err != nil {
-		return nil, 0, err
-	}
 	defer f.Close()
 	if offset < 0 {
 		offset = 0
 	}
-	if offset >= size {
-		return nil, size, nil
+	if offset > maxBlobBody {
+		offset = maxBlobBody + 1
 	}
-	if length <= 0 || offset+length > size {
-		length = size - offset
+	if length <= 0 || length > maxBlobBody {
+		length = maxBlobBody
 	}
-	buf := make([]byte, length)
-	n, err := f.ReadAt(buf, offset)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, size, err
+	if strings.HasSuffix(p, ".zst") {
+		if cached := t.cachedBlob(hash); cached != nil {
+			size := int64(len(cached))
+			if offset >= size {
+				return nil, size, nil
+			}
+			end := min(offset+length, size)
+			return append([]byte(nil), cached[offset:end]...), size, nil
+		}
 	}
-	return buf[:n], size, nil
+	if !strings.HasSuffix(p, ".zst") {
+		st, err := f.Stat()
+		if err != nil {
+			return nil, 0, err
+		}
+		if st.Size() > maxBlobBody {
+			return nil, 0, fmt.Errorf("blob exceeds %d bytes", maxBlobBody)
+		}
+		if offset >= st.Size() {
+			return nil, st.Size(), nil
+		}
+		length = min(length, st.Size()-offset)
+		buf := make([]byte, length)
+		n, err := f.ReadAt(buf, offset)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, st.Size(), err
+		}
+		return buf[:n], st.Size(), nil
+	}
+	decoder, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxBlobBody))
+	if err != nil {
+		return nil, 0, err
+	}
+	defer decoder.Close()
+	buf := make([]byte, 32*1024)
+	cacheEligible := true
+	var cacheData []byte
+	for {
+		n, readErr := decoder.Read(buf)
+		if total+int64(n) > maxBlobBody {
+			return nil, 0, fmt.Errorf("blob exceeds %d bytes", maxBlobBody)
+		}
+		start := max(offset, total)
+		end := min(offset+length, total+int64(n))
+		if start < end {
+			data = append(data, buf[start-total:end-total]...)
+		}
+		if cacheEligible {
+			if total+int64(n) <= maxCachedBlob {
+				cacheData = append(cacheData, buf[:n]...)
+			} else {
+				cacheEligible = false
+				cacheData = nil
+			}
+		}
+		total += int64(n)
+		if errors.Is(readErr, io.EOF) {
+			if cacheEligible {
+				t.cacheBlob(hash, cacheData)
+			}
+			return data, total, nil
+		}
+		if readErr != nil {
+			return nil, 0, readErr
+		}
+	}
 }
 
 // ExchangeMeta is one row of the index (returned by Search).
@@ -956,6 +1457,17 @@ func (t *Traffic) Get(id string) (req, resp string, err error) {
 FROM exchange_bodies b JOIN exchanges e ON e.id=b.id WHERE b.id=?`, id).
 		Scan(&reqHead, &reqBody, &reqBlob, &respHead, &respBody, &respBlob, &reqLen, &respLen)
 	if err == nil {
+		reqBody, respBody = decompressInline(reqBody), decompressInline(respBody)
+		// Inline bodies are stored exactly as captured, so apply HTTP
+		// Content-Encoding here as well as at index time. A spilled body's
+		// inline column is already a decoded preview; its blob pointer is left
+		// untouched.
+		if !reqBlob.Valid || reqBlob.String == "" {
+			reqBody = decodeHTTPBody(reqHead, reqBody)
+		}
+		if !respBlob.Valid || respBlob.String == "" {
+			respBody = decodeHTTPBody(respHead, respBody)
+		}
 		return assembleRaw(reqHead, reqBody, reqBlob, reqLen), assembleRaw(respHead, respBody, respBlob, respLen), nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -1834,7 +2346,7 @@ func (t *Traffic) gcBlobs() error {
 			}
 			return nil
 		}
-		h := strings.TrimSuffix(d.Name(), ".bin")
+		h := strings.TrimSuffix(strings.TrimSuffix(d.Name(), ".zst"), ".bin")
 		if _, ok := refs[h]; !ok {
 			os.Remove(p)
 		}
@@ -1848,6 +2360,60 @@ func (t *Traffic) gcBlobs() error {
 	sort.Slice(buckets, func(i, j int) bool { return len(buckets[i]) > len(buckets[j]) })
 	for _, b := range buckets {
 		os.Remove(b)
+	}
+	return nil
+}
+
+// gcBlobsBatched is the retention variant of gcBlobs. It checks each candidate
+// under the recorder lock immediately before unlinking it, but releases that
+// lock between files so a large retention sweep cannot freeze proxy replies.
+func (t *Traffic) gcBlobsBatched() error {
+	legacy := make(map[string]struct{})
+	if err := t.legacyBlobRefs(legacy); err != nil {
+		return err
+	}
+	root := filepath.Join(t.dir, "_blobs", "sha256")
+	var buckets []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+		if t.stopping() {
+			return filepath.SkipAll
+		}
+		if walkErr != nil || d == nil {
+			return nil
+		}
+		if d.IsDir() {
+			if p != root {
+				buckets = append(buckets, p)
+			}
+			return nil
+		}
+		h := strings.TrimSuffix(strings.TrimSuffix(d.Name(), ".zst"), ".bin")
+		if _, keep := legacy[h]; keep {
+			return nil
+		}
+		t.wmu.Lock()
+		var present int
+		queryErr := t.db.QueryRow(`SELECT 1 FROM blob_refs WHERE hash=? LIMIT 1`, h).Scan(&present)
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			queryErr = os.Remove(p)
+			if os.IsNotExist(queryErr) {
+				queryErr = nil
+			}
+		}
+		t.wmu.Unlock()
+		return queryErr
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if t.stopping() {
+		return nil
+	}
+	sort.Slice(buckets, func(i, j int) bool { return len(buckets[i]) > len(buckets[j]) })
+	for _, bucket := range buckets {
+		t.wmu.Lock()
+		_ = os.Remove(bucket) // nonempty directories are left intact
+		t.wmu.Unlock()
 	}
 	return nil
 }
@@ -1997,130 +2563,7 @@ func normalizeSearchHost(raw string) (host, port string, err error) {
 
 // Tools exposes traffic lookup to work agents so they query already-captured
 // traffic instead of re-curling the same resource (token + dedup win).
-func (t *Traffic) Tools() []actool.CoreTool {
-	allow := func(context.Context, json.RawMessage, permission.Context) permission.Decision {
-		return permission.Allowed()
-	}
-	ro := func(json.RawMessage) bool { return true }
-
-	search := actool.Build(actool.Spec{
-		Name:        "traffic_search",
-		Description: TrafficSearchDescription,
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"host":          map[string]any{"type": "string", "description": "按主机过滤（必填；如 '107.172.96.177'、'107.172.96.177:8082' 或 'http://107.172.96.177:8082/path'）"},
-				"contains":      map[string]any{"type": "string", "description": "URL 子串过滤（可选，如 'api' / 'login'）"},
-				"body_contains": map[string]any{"type": "string", "description": "正文全文搜索（可选，至少 3 个字符），匹配请求/响应的头与正文，如 'password' / 'root:x:0' / '内网测试'"},
-				"limit":         map[string]any{"type": "integer", "description": "每页条数，默认 3，最大 10"},
-				"page":          map[string]any{"type": "integer", "description": "页码，从 0 开始，默认 0（按 ts 倒序分页）"},
-			},
-			"required": []any{"host"},
-		},
-		ReadOnly:    ro,
-		Permissions: allow,
-		Run: func(_ context.Context, in json.RawMessage, _ *actool.ToolContext) (actool.Result, error) {
-			var a struct {
-				Host, Contains string
-				BodyContains   string `json:"body_contains"`
-				Limit          int
-				Page           int
-			}
-			_ = json.Unmarshal(in, &a)
-			if strings.TrimSpace(a.Host) == "" {
-				return actool.Errorf("host 为必填参数：请指定裸主机、主机:端口或完整 URL，避免全库扫描。"), nil
-			}
-			rows, err := t.query(a.Host, a.Contains, a.BodyContains, a.Page, a.Limit)
-			if err != nil {
-				return actool.Errorf(err.Error()), nil
-			}
-			if len(rows) == 0 {
-				return actool.Text("无匹配流量。"), nil
-			}
-			// 精简为最小索引：仅保留定位所需字段 + 响应码/长度，不带任何响应内容。
-			type liteRow struct {
-				ID      string `json:"id"`
-				Method  string `json:"method"`
-				URL     string `json:"url"`
-				Status  int    `json:"status"`
-				RespLen int    `json:"resp_len"`
-			}
-			lite := make([]liteRow, 0, len(rows))
-			for _, r := range rows {
-				lite = append(lite, liteRow{ID: r.ID, Method: r.Method, URL: r.URL, Status: r.Status, RespLen: r.RespLen})
-			}
-			b, _ := json.Marshal(lite)
-			return actool.Text(string(b)), nil
-		},
-	})
-
-	get := actool.Build(actool.Spec{
-		Name:        "traffic_get",
-		Description: "按 id 取一条已抓流量的请求/响应原文（过大会截断）。配合 traffic_search 用，避免重复 curl。",
-		Schema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"id": map[string]any{"type": "string", "description": "traffic_search 返回的 id"}},
-			"required":   []any{"id"},
-		},
-		ReadOnly:    ro,
-		Permissions: allow,
-		Run: func(_ context.Context, in json.RawMessage, _ *actool.ToolContext) (actool.Result, error) {
-			var a struct{ ID string }
-			_ = json.Unmarshal(in, &a)
-			req, resp, err := t.Get(a.ID)
-			if err != nil {
-				return actool.Errorf(err.Error()), nil
-			}
-			return actool.Text("=== REQUEST ===\n" + clip(req, 2500) + "\n\n=== RESPONSE ===\n" + clip(resp, 4000)), nil
-		},
-	})
-
-	blob := actool.Build(actool.Spec{
-		Name:        "traffic_blob",
-		Description: "分段读取超大请求/响应体的原文。traffic_get 里显示为 '…[truncated] @blob sha256:<hash>' 的部分即存放于此，把该 hash 传进来即可取完整内容。单次最多返回 8KB，用 offset 继续往后读（返回结果会给出总长度）。适合翻阅备份文件、源码泄露、大 JSON 导出等超过内联阈值的响应。",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"hash":   map[string]any{"type": "string", "description": "traffic_get 中 @blob sha256: 后面的 64 位十六进制值"},
-				"offset": map[string]any{"type": "integer", "description": "起始字节偏移，默认 0"},
-				"length": map[string]any{"type": "integer", "description": "本次读取字节数，默认且最大 8192"},
-			},
-			"required": []any{"hash"},
-		},
-		ReadOnly:    ro,
-		Permissions: allow,
-		Run: func(_ context.Context, in json.RawMessage, _ *actool.ToolContext) (actool.Result, error) {
-			var a struct {
-				Hash   string
-				Offset int64
-				Length int64
-			}
-			_ = json.Unmarshal(in, &a)
-			if a.Length <= 0 || a.Length > maxBlobRead {
-				a.Length = maxBlobRead
-			}
-			data, total, err := t.BlobRange(a.Hash, a.Offset, a.Length)
-			if err != nil {
-				return actool.Errorf(err.Error()), nil
-			}
-			if len(data) == 0 {
-				return actool.Text(fmt.Sprintf("偏移 %d 已超出内容长度（总长 %d 字节）。", a.Offset, total)), nil
-			}
-			head := fmt.Sprintf("[offset=%d 本次=%d 总长=%d]\n", a.Offset, len(data), total)
-			if isBinaryBody("", data) {
-				return actool.Text(head + "二进制内容，以十六进制展示前 512 字节：\n" + hex.EncodeToString(clipBytes(data, 512))), nil
-			}
-			return actool.Text(head + truncateUTF8(data, len(data))), nil
-		},
-	})
-
-	return []actool.CoreTool{search, get, blob}
-}
-
-// SeedToolMetas returns the traffic tools built on a ZERO receiver, for seeding the
-// tools catalog (metadata only — Name/Description/InputSchema). The handlers close
-// over the nil receiver but are never invoked on this instance, so it is safe.
-func SeedToolMetas() []actool.CoreTool { return (&Traffic{}).Tools() }
+func (t *Traffic) Tools() []actool.CoreTool { return []actool.CoreTool{t.searchTool(), t.getTool()} }
 
 func clip(s string, max int) string {
 	if len(s) <= max {

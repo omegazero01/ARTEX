@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	pgdb "github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/traffic"
+	pgdb "github.com/neouks/series/db"
+	"github.com/neouks/series/traffic"
 )
 
 func TestSeedAssociatesTargetAssetWithTask(t *testing.T) {
@@ -18,7 +18,7 @@ func TestSeedAssociatesTargetAssetWithTask(t *testing.T) {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
 	defer m.Close()
-	task, err := m.CreateTask("seed ownership", "seed ownership", nil, 0, 0)
+	task, err := m.CreateTask("测试 https://seed.example.test", "seed ownership", nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestSeedAssociatesTargetAssetWithTask(t *testing.T) {
 		_, _ = m.DeleteTask(task.ID, DeleteTaskOptions{DeleteAssets: true})
 	})
 
-	host := fmt.Sprintf("seed-%s.example.test", task.ID)
+	host := "seed.example.test"
 	s := &Server{m: m}
 	s.seed(task, "https://"+host)
 	taskID := mustTaskID(t, task.ID)

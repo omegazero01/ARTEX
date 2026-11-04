@@ -13,17 +13,66 @@ import (
 // placed as the LAST system-prompt segment, with DynamicBoundary set so the whole
 // (session-fixed) system prompt — including the block — is cached (design doc
 // §2.1 / C1). Skill-gated MCP names are NOT in this block; they surface when their
-// skill loads. Returns a single plain segment + boundary 0 when there is no global
-// block to add.
+// skill loads. Even without a global block, the static system segment remains a
+// valid cache prefix, so the boundary is always the number of returned segments.
+const toolAvailabilityRule = "\n\n工具调用以本轮实际提供的名称和参数为准。正文或历史提到但本轮未提供的可选工具不代表可调用；缺少时说明限制，不猜测名称、不反复重试。延迟工具先按发现/解锁流程加载。"
+
+const contextReadRule = "\n读取规则：按本轮工具Schema选择类型和视图；types仅组合枚举内的值，混合查询不会跳过未授权类型。本任务查询省略task_id，source_task_id只是来源标识。context_search用types/q、单个asset_id，按next_cursor续页；context_get用items:[{ref:带类型引用,view:视图}]，优先直接使用搜索返回的read。资产身份不明确用asset_search的dsl及独立type参数，按next_offset续页；已有资产ID复用，缺详情才用asset_get的ids。资产ID与node/activity引用不可混用。has_more表示未展示完，按需缩小范围或续读，不必全量翻页；未查完不能断言不存在。授权以当前角色及执行校验为准。"
+
 func deferredSystem(sysText string, def DeferredInfo) (system []string, boundary int) {
+	sysText += toolAvailabilityRule
+	if def.ContextReads {
+		sysText += contextReadRule
+	}
 	sysText += def.FindingGuidance
+	sysText += def.AssetGuidance
 	block := actool.RenderDeferredToolsBlock(def.GlobalNames)
 	if block == "" {
-		return []string{sysText}, 0
+		return []string{sysText}, 1
 	}
 	system = []string{sysText, block}
 	boundary = len(system) // b >= len → whole system prompt cached (SDK guard)
 	return system, boundary
+}
+
+// Appended after editable prompts so saved instructions cannot advertise an
+// unbound asset reader. The handler still enforces all grants and task scope.
+func plannerAssetGuidance(tools []actool.CoreTool) string {
+	var search actool.CoreTool
+	get := false
+	for _, tool := range tools {
+		if tool.Name() == "asset_search" {
+			search = tool
+		}
+		get = get || tool.Name() == "asset_get"
+	}
+	text := "\nPlanner 资产读取："
+	if search != nil {
+		text += "本轮已提供 asset_search，资产身份不明确时才调用；"
+		// Use the resolved schema, including capability and coverage restrictions.
+		// Required fields may be []string in code or []any after JSON decoration.
+		raw, _ := json.Marshal(search.InputSchema()["required"])
+		var required []string
+		_ = json.Unmarshal(raw, &required)
+		untestedOnly := false
+		for _, field := range required {
+			untestedOnly = untestedOnly || field == "untested"
+		}
+		if untestedOnly {
+			text += "当前仅允许未测试资产查询，传 untested=true，dsl 可选。"
+		} else {
+			text += "按工具说明选择获准模式；普通检索传非空 dsl（如 ip==192.0.2.1），type 是独立参数，不写入 dsl。"
+		}
+		text += "仅检索本任务及直接关联任务的授权可见资产，不传 task_id。"
+	} else {
+		text += "本轮未提供 asset_search，不得调用；使用已提供的态势及其他实际可用工具，不猜测资产 ID。"
+	}
+	if get {
+		text += "已知资产 ID 直接复用，缺少字段时才用 asset_get 的 ids 读取详情。"
+	} else {
+		text += "本轮未提供 asset_get，不得调用。"
+	}
+	return text + "工具读取权限不等于资产审批；未审批、封禁、撤回或越界方向仍须跳过，不能通过其他工具绕过。"
 }
 
 // seedUnlockFromHistory replays prior Skill() invocations in the conversation so
@@ -35,16 +84,27 @@ func seedUnlockFromHistory(msgs []llm.Message, unlockSkill func(string)) {
 	if unlockSkill == nil {
 		return
 	}
+	// An attempted/denied/interrupted Skill call is not evidence of loading it.
+	// Replay only paired successful results; otherwise a resume would unlock a
+	// capability that the live execution gate had refused.
+	pending := map[string]string{}
 	for _, m := range msgs {
-		for _, b := range m.ToolUses() {
-			if b.Name != "Skill" {
-				continue
+		for _, b := range m.Content {
+			if b.Type == llm.BlockToolUse && b.Name == "Skill" && b.ID != "" {
+				var in struct {
+					Name string `json:"name"`
+				}
+				if json.Unmarshal(b.Input, &in) == nil && in.Name != "" {
+					pending[b.ID] = in.Name
+				}
 			}
-			var in struct {
-				Name string `json:"name"`
-			}
-			if json.Unmarshal(b.Input, &in) == nil && in.Name != "" {
-				unlockSkill(in.Name)
+			if b.Type == llm.BlockToolResult {
+				if name, ok := pending[b.ToolUseID]; ok {
+					if !b.IsError {
+						unlockSkill(name)
+					}
+					delete(pending, b.ToolUseID)
+				}
 			}
 		}
 	}

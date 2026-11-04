@@ -113,6 +113,10 @@ func New(ctx context.Context, server, url string, headers map[string]string, ins
 		protocol: protocolVersion,
 	}
 	if err := c.initialize(ctx); err != nil {
+		// initialize may already have assigned a session id before a later
+		// notification/error. Best-effort DELETE keeps temporary connections
+		// from lingering on servers that track Streamable HTTP sessions.
+		_ = c.Close()
 		return nil, err
 	}
 	return c, nil
@@ -247,7 +251,7 @@ func (c *Client) initialize(ctx context.Context) error {
 	if _, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": version,
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "artex", "version": "0.2"},
+		"clientInfo":      map[string]any{"name": "series", "version": "0.2"},
 	}); err != nil {
 		return err
 	}
@@ -374,7 +378,9 @@ func (c *Client) Close() error {
 	if sid == "" {
 		return nil
 	}
-	req, err := http.NewRequest(http.MethodDelete, c.url, nil)
+	closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(closeCtx, http.MethodDelete, c.url, nil)
 	if err != nil {
 		return nil
 	}

@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
 )
 
 type goalSpec struct {
@@ -41,6 +41,11 @@ func (s *Server) launchTask(t *Task, seedText string, seedFirstIntent bool) {
 
 func (s *Server) startTaskEngine(t *Task) {
 	ctx := s.engine.execContextFor(s.ctx, t.ID)
+	if ctx.Err() != nil || s.engine.IsDeleting(t.ID) {
+		return
+	}
+	// 联盟画像软提示阅读：仅在任务绑定快照时执行；失败只记录，不暂停任务。
+	s.ensureAllianceProfileRead(ctx, t)
 	if ctx.Err() != nil || s.engine.IsDeleting(t.ID) {
 		return
 	}

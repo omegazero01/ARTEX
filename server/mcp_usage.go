@@ -1,0 +1,46 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"strings"
+
+	actool "github.com/Autumn-27/norma/tool"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
+)
+
+type meteredMCPTool struct {
+	actool.CoreTool
+	recorder   interface{ InsertMCPUsage(*db.MCPUsage) error }
+	serverID   int64
+	serverName string
+	toolName   string
+	agentKey   string
+	ri         agent.RunInfo
+}
+
+func meterMCPTool(t actool.CoreTool, recorder interface{ InsertMCPUsage(*db.MCPUsage) error }, serverID int64, serverName, agentKey string, ri agent.RunInfo) actool.CoreTool {
+	if recorder == nil {
+		return t
+	}
+	name := strings.TrimPrefix(t.Name(), "mcp__"+serverName+"__")
+	return &meteredMCPTool{CoreTool: t, recorder: recorder, serverID: serverID, serverName: serverName, toolName: name, agentKey: agentKey, ri: ri}
+}
+
+func (m *meteredMCPTool) Call(ctx context.Context, input json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
+	if err := m.recorder.InsertMCPUsage(&db.MCPUsage{ServerID: m.serverID, ServerName: m.serverName, ToolName: m.toolName, AgentKey: m.agentKey, TaskID: m.ri.TaskID, ExplorationID: m.ri.ExplorationID, IntentID: m.ri.IntentID, SessionID: m.ri.SessionID}); err != nil {
+		log.Printf("[mcusage] insert %s/%s: %v", m.serverName, m.toolName, err)
+	}
+	return m.CoreTool.Call(ctx, input, tc)
+}
+
+func (t *meteredMCPTool) PrepareInput(in json.RawMessage) (json.RawMessage, error) {
+	return agent.PrepareToolInput(t.CoreTool, in)
+}
+
+func (t *meteredMCPTool) AcceptsRawInput() bool {
+	raw, ok := t.CoreTool.(interface{ AcceptsRawInput() bool })
+	return ok && raw.AcceptsRawInput()
+}

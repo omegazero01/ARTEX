@@ -16,7 +16,9 @@ import (
 // UnlockSkill unlocks a named skill's MCPs — hosts call it to rebuild the unlock set
 // from history on a resumed session (design doc C2).
 type DeferredInfo struct {
+	ContextReads    bool              // final role surface has unified context readers
 	FindingGuidance string            // derived from the final permitted tools, including DB overrides
+	AssetGuidance   string            // Planner guidance follows the final bound asset readers
 	Deferred        []string          // all MCP tool names (schema withheld)
 	GlobalNames     []string          // MCP names to list in the system-prompt block
 	Unlock          *actool.UnlockSet // shared call-gate; nil when no MCP tools
@@ -33,10 +35,31 @@ type DeferredInfo struct {
 // until a user assigns a skill/MCP to the agent in the UI.
 var ToolAugment func(ctx context.Context, agentKey string) (extra []actool.CoreTool, def DeferredInfo, cleanup func())
 
+type taskToolSetContextKey struct{}
+
+// WithTaskToolSet preserves the run's stores, authorization scope and callbacks
+// when the DB catalog injects additional domain tools not present in the base.
+func WithTaskToolSet(ctx context.Context, ts *ToolSet) context.Context {
+	return context.WithValue(ctx, taskToolSetContextKey{}, ts)
+}
+
+func TaskDomainToolsFrom(ctx context.Context) map[string]actool.CoreTool {
+	ts, _ := ctx.Value(taskToolSetContextKey{}).(*ToolSet)
+	if ts == nil || ts.ts == nil {
+		return nil
+	}
+	out := make(map[string]actool.CoreTool)
+	for _, tool := range ts.AllDomainTools() {
+		out[tool.Name()] = tool
+	}
+	return out
+}
+
 // AugmentTools returns base plus the agent's visible skill/MCP tools, the
 // DeferredInfo, and a cleanup func the caller must defer (closes MCP clients).
-// Built-in base tools are kept as-is — never filtered (内置工具留代码层，不做可见性过滤).
-func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) ([]actool.CoreTool, DeferredInfo, func()) {
+// The catalog filters bindings/enabled flags. Configuration errors return no
+// capabilities; callers must run cleanup and stop before constructing a session.
+func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) ([]actool.CoreTool, DeferredInfo, func(), error) {
 	var (
 		def     DeferredInfo
 		cleanup = func() {}
@@ -50,7 +73,17 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 			cleanup = cl
 		}
 		if len(extra) > 0 {
-			out = append(append([]actool.CoreTool{}, base...), extra...)
+			out = append([]actool.CoreTool{}, base...)
+			seen := map[string]bool{}
+			for _, tool := range out {
+				seen[tool.Name()] = true
+			}
+			for _, tool := range extra {
+				if !seen[tool.Name()] {
+					out = append(out, tool)
+					seen[tool.Name()] = true
+				}
+			}
 		}
 	}
 	// DB tools table has the final say on the built-in tools: drop the ones this
@@ -58,13 +91,23 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 	// descriptions/schemas + default injection. MCP/skill/host tools have no row
 	// and pass through untouched, so deferred/unlock wiring stays consistent.
 	if ToolResolve != nil {
-		out = ToolResolve(ctx, agentKey, out)
+		var err error
+		out, err = ToolResolve(ctx, agentKey, out)
+		if err != nil {
+			return nil, DeferredInfo{}, cleanup, err
+		}
 	}
 	out, def.FindingGuidance = findingWorkflowTools(agentKey, out)
-	for i, t := range out {
-		out[i] = guardPanic(t)
+	if agentKey == "planner" {
+		def.AssetGuidance = plannerAssetGuidance(out)
 	}
-	return out, def, cleanup
+	for i, tool := range out {
+		if tool.Name() == "context_search" || tool.Name() == "context_get" || tool.Name() == "asset_search" {
+			def.ContextReads = true
+		}
+		out[i] = guardPanic(tool)
+	}
+	return out, def, cleanup, nil
 }
 
 // guardPanic turns a panicking tool handler into an ordinary tool error. The
@@ -75,6 +118,15 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 func guardPanic(t actool.CoreTool) actool.CoreTool { return &guardedTool{CoreTool: t} }
 
 type guardedTool struct{ actool.CoreTool }
+
+func (g *guardedTool) PrepareInput(in json.RawMessage) (json.RawMessage, error) {
+	return PrepareToolInput(g.CoreTool, in)
+}
+
+func (g *guardedTool) AcceptsRawInput() bool {
+	t, ok := g.CoreTool.(interface{ AcceptsRawInput() bool })
+	return ok && t.AcceptsRawInput()
+}
 
 func (g *guardedTool) Call(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (res actool.Result, err error) {
 	defer func() {

@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/Autumn-27/artex/notify"
 )
 
 var (
@@ -326,21 +324,31 @@ func (d *DB) EditFindingTraffic(ctx context.Context, findingID, bindingID, versi
 }
 
 type RecordFindingInput struct {
+	Reproduction *FindingReproduction
+
+	// Set only by the trusted task tool adapter, never from model arguments.
+	AccessRole string `json:"-"`
+	// Trusted caller rechecks role/asset permissions after a potentially slow review.
+	Revalidate                                           func(context.Context) error `json:"-"`
+	SuppressionCheck                                     *FindingSuppressionCheck
 	TaskID, ExplorationID, IntentID                      int64
 	VulnClass, Name, Severity, Summary, Evidence, Worker string
 	AssetIDs                                             []int64
+	SuppressionTargets                                   []FindingTarget `json:"-"`
 }
 
 type RecordedFinding struct {
-	FindingID int64           `json:"finding_id,string"`
-	NodeID    int64           `json:"finding_node_id,string"`
-	Traffic   *FindingTraffic `json:"traffic"`
+	SuppressionCheck *FindingSuppressionCheck `json:"suppression_check,omitempty"`
+	FindingID        int64                    `json:"finding_id,string"`
+	NodeID           int64                    `json:"finding_node_id,string"`
+	Traffic          *FindingTraffic          `json:"traffic"`
 }
 
-// ctx 由调用方传入本次事务所用的上下文（而非在内部取 context.Background）：
-// 事务内新加的推送事件写入同样应受调用方的取消与超时约束。
-func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, prepared []PreparedTrafficEvidence) (*RecordedFinding, error) {
-	if err := LockTaskEvidenceTx(tx, in.TaskID); err != nil {
+func RecordFindingTx(tx *sql.Tx, in RecordFindingInput, prepared []PreparedTrafficEvidence) (*RecordedFinding, error) {
+	if err := in.Reproduction.ValidateInput(); err != nil {
+		return nil, err
+	}
+	if err := LockFindingRecordTx(tx, in); err != nil {
 		return nil, err
 	}
 	if in.TaskID > 0 {
@@ -361,8 +369,17 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 			return nil, errors.New("intent_id 必须是本任务的意图（关联任务意图只读）")
 		}
 	}
+	if err := ValidateFindingSuppressionTx(tx, in); err != nil {
+		return nil, err
+	}
+	if err := ValidateFindingAccessTx(tx, in); err != nil {
+		return nil, err
+	}
+	if err := validateReproductionTrafficTx(tx, in, prepared); err != nil {
+		return nil, err
+	}
 	payload, _ := json.Marshal(map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}})
-	out := &RecordedFinding{}
+	out := &RecordedFinding{SuppressionCheck: in.SuppressionCheck}
 	if err := tx.QueryRow(`INSERT INTO exploration_nodes(exploration_id,kind,payload,priority,state,origin)
 VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string(payload), in.Worker).Scan(&out.NodeID); err != nil {
 		return nil, err
@@ -386,31 +403,48 @@ VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string
 VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, in.TaskID, out.NodeID, in.VulnClass, in.Name, in.Severity, in.Summary, in.Evidence, in.Worker, string(raw)).Scan(&out.FindingID); err != nil {
 		return nil, err
 	}
-	// 在**同一事务**里登记一条推送事件：提交即保证「漏洞落库」与「推送任务存在」
-	// 原子一致，不存在提交成功却没入队、消息永久丢失的窗口。
-	// 这里的失败被隔离在保存点上、不影响漏洞写入（见函数注释），因此忽略返回值。
-	RecordNotificationEventTx(ctx, tx, notify.EventFindingCreated, out.FindingID, notify.Snapshot{
-		Kind:      notify.EventFindingCreated,
-		FindingID: out.FindingID,
-		TaskID:    in.TaskID,
-		VulnClass: in.VulnClass,
-		Name:      in.Name,
-		Severity:  in.Severity,
-		Summary:   in.Summary,
-		AssetIDs:  assets,
-	})
 	if err := AddFindingTrafficTx(tx, out.FindingID, prepared); err != nil {
 		return nil, err
 	}
+	if in.SuppressionCheck != nil {
+		summary := "漏洞禁报校验通过"
+		if in.SuppressionCheck.Status == "unchecked" {
+			summary = "禁报校验未完成，按用户策略允许上报"
+		}
+		metadata, err := json.Marshal(map[string]any{"finding_suppression": in.SuppressionCheck, "finding_id": out.FindingID})
+		if err != nil {
+			return nil, err
+		}
+		// The failure-open receipt is committed with the finding, never lost if
+		// the process exits immediately after commit or an audit write fails.
+		if _, err := tx.Exec(`INSERT INTO activity(exploration_id,node_id,worker,kind,summary,detail,metadata) VALUES($1,$2,$3,'status',$4,$5,$6)`, in.ExplorationID, out.NodeID, in.Worker, summary, in.SuppressionCheck.Reason, string(metadata)); err != nil {
+			return nil, err
+		}
+	}
 	var err error
 	out.Traffic, err = FindingTrafficTx(tx, out.FindingID)
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	if in.Reproduction != nil {
+		raw, err := in.Reproduction.Resolve(out.Traffic.Bindings)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec(`UPDATE findings SET reproduction=$2::jsonb WHERE id=$1`, out.FindingID, string(raw)); err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec(`UPDATE exploration_nodes SET payload=jsonb_set(payload,'{reproduction}',$2::jsonb) WHERE id=$1`, out.NodeID, string(raw)); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // RecordFinding is the atomic legacy/no-recorder path used by tools and tests.
 func (s *ExplorationStore) RecordFinding(ctx context.Context, in RecordFindingInput) (out *RecordedFinding, err error) {
 	in.ExplorationID = s.expID
-	err = s.db.WithEvidenceTx(ctx, func(tx *sql.Tx) error { var e error; out, e = RecordFindingTx(ctx, tx, in, nil); return e })
+	err = s.db.WithEvidenceTx(ctx, func(tx *sql.Tx) error { var e error; out, e = RecordFindingTx(tx, in, nil); return e })
 	return
 }
 
@@ -453,7 +487,7 @@ func (s *ExplorationStore) PopulateFindingTrafficIDs(nodes []*Node) error {
 	return rows.Err()
 }
 
-func (d *DB) SetFindingReportVersionByNodeID(ctx context.Context, nodeID int64, report string, version *int64) (n int64, err error) {
+func (d *DB) SetFindingReportVersionByNodeID(ctx context.Context, nodeID int64, report, detail string, version *int64) (n int64, err error) {
 	err = d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
 		var id int64
 		if err := tx.QueryRow(`SELECT id FROM findings WHERE node_id=$1`, nodeID).Scan(&id); err != nil {
@@ -465,7 +499,7 @@ func (d *DB) SetFindingReportVersionByNodeID(ctx context.Context, nodeID int64, 
 		if err := LockFindingEvidenceTx(tx, id, version); err != nil {
 			return err
 		}
-		res, err := tx.Exec(`UPDATE findings SET report=$2,report_evidence_version=COALESCE($3::bigint,CASE WHEN evidence_version=0 THEN 0 ELSE -1 END) WHERE id=$1`, id, report, version)
+		res, err := tx.Exec(`UPDATE findings SET report=$2,report_detail=$3,report_evidence_version=COALESCE($4::bigint,CASE WHEN evidence_version=0 THEN 0 ELSE -1 END) WHERE id=$1`, id, report, detail, version)
 		if err != nil {
 			return err
 		}

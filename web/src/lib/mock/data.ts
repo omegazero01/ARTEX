@@ -3,6 +3,8 @@
 // self-consistent (one company "Acme", a few tasks, findings, exploration graph,
 // sessions/activity, traffic, agents, etc.) so every page looks populated.
 
+import contextToolCatalog from "./context-tools.json";
+
 import type {
   Activity,
   Agent,
@@ -602,6 +604,31 @@ export const findings: Finding[] = [
   },
   {
     id: "f-2",
+    reproduction: {
+      entry_point: "GET https://api.acme.com/v1/orders?id=1002",
+      prerequisites: ["使用测试账号A登录，准备账号A和账号B各自的订单；以下为本地合成演示数据。"],
+      steps: [
+        {
+          title: "读取自己的订单作为对照",
+          action: "使用账号A的会话读取其订单1001，确认接口及返回格式。",
+          request:
+            "GET /v1/orders?id=1001 HTTP/1.1\r\nHost: api.acme.com\r\nAuthorization: Bearer DEMO_SESSION_A\r\n\r\n",
+          response: 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"id":1001,"owner":"A"}',
+          result: "返回账号A的订单。",
+          proves: "合法账号可正常访问自己的订单。",
+        },
+        {
+          title: "仅修改订单编号读取其他账号订单",
+          action: "保持账号A的会话不变，将id从1001改为账号B的订单1002。",
+          request:
+            "GET /v1/orders?id=1002 HTTP/1.1\r\nHost: api.acme.com\r\nAuthorization: Bearer DEMO_SESSION_A\r\n\r\n",
+          response:
+            'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"id":1002,"owner":"B","address":"演示地址"}',
+          result: "接口返回账号B的订单及地址。",
+          proves: "本次演示可跨账号读取该订单，未验证其他资源。",
+        },
+      ],
+    },
     assets: [assetRef(15)],
     vulnclass: "IDOR",
     severity: "high",
@@ -615,6 +642,19 @@ export const findings: Finding[] = [
   },
   {
     id: "f-3",
+    reproduction: {
+      prerequisites: ["仅使用本地合成测试Token。"],
+      steps: [
+        {
+          title: "检查本地签名验证输出",
+          action: "读取本地验证命令返回结果。",
+          command: "printf 'demo signature verified\\n'",
+          output: "demo signature verified\n",
+          result: "演示输出已保留。",
+          proves: "该内容为UI演示，不是线上验证证据。",
+        },
+      ],
+    },
     assets: [assetRef(3)],
     vulnclass: "Weak JWT",
     severity: "high",
@@ -1001,6 +1041,34 @@ export const explorationGraph: { nodes: TaskNode[]; edges: Edge[] } = {
       ts: T("2026-07-25T23:50:00Z"),
     },
 
+    {
+      id: "i14",
+      type: "intent",
+      payload: P({ summary: "核对订单接口的权限边界" }),
+      priority: 5,
+      state: "open",
+      origin: "planner",
+      ts: T("2026-07-26T00:10:00Z"),
+    },
+    {
+      id: "i15",
+      type: "intent",
+      payload: P({ summary: "核对用户资料接口授权" }),
+      priority: 5,
+      state: "open",
+      origin: "planner",
+      ts: T("2026-07-26T00:10:00Z"),
+    },
+    {
+      id: "i16",
+      type: "intent",
+      payload: P({ summary: "检查订单导出权限" }),
+      priority: 5,
+      state: "open",
+      origin: "planner",
+      ts: T("2026-07-26T00:10:00Z"),
+    },
+
     // ── 事实 ──
     {
       id: "fa1",
@@ -1286,7 +1354,18 @@ export const explorationGraph: { nodes: TaskNode[]; edges: Edge[] } = {
   ],
 };
 
-export const intents: TaskNode[] = explorationGraph.nodes.filter((n) => n.type === "intent");
+export const intents: TaskNode[] = [
+  {
+    id: "101",
+    type: "intent",
+    payload: P({ summary: "接口权限核验（Worker 回传演示）" }),
+    priority: 5,
+    state: "done",
+    origin: "mainagent",
+    ts: T("2026-07-26T09:55:00Z"),
+  },
+  ...explorationGraph.nodes.filter((n) => n.type === "intent"),
+];
 export const frontier: TaskNode[] = explorationGraph.nodes.filter(
   (n) => n.type === "intent" && (n.state === "open" || n.state === "running"),
 );
@@ -2750,6 +2829,34 @@ export const activity: Activity[] = [
     summary:
       "确认拿下。攻击路径：shop Fastjson RCE → DMZ 提权 → 内网 Jenkins 导出域凭据 → svc_deploy 属 Domain Admins → psexec DC01 SYSTEM → secretsdump 全域哈希。四个目标全部达成或推进中。",
   },
+  {
+    seq: 408,
+    worker: "work#1",
+    intent_id: "101",
+    ts: T("2026-07-26T09:59:00Z"),
+    kind: "result",
+    summary: "完成接口权限核验，已记录核验事实。仅展示测试结果，不发起额外执行。",
+  },
+  {
+    seq: 410,
+    worker: "mainagent",
+    main_seg: 0,
+    ts: T("2026-07-26T10:00:00Z"),
+    kind: "text",
+    summary:
+      "### Worker 结果 · 意图 #101\n\n状态：已完成\n\n已完成接口核验，记录了已验证事实。详细过程见 Worker 原始会话。\n\n[查看 Worker 原始会话](/function/tasks/detail?id=t-acme-web&session=intent:101&activity=408)",
+    metadata: { worker_feedback: { id: 1, intent_id: 101, state: "done", source_activity_id: 408 } },
+  },
+  {
+    seq: 411,
+    worker: "mainagent",
+    main_seg: 0,
+    ts: T("2026-07-26T10:01:00Z"),
+    kind: "text",
+    is_error: true,
+    summary: "### Worker 结果 · 意图 #102\n\n状态：已终止\n\n本次未产生最终总结，请查看 Worker 会话中的已有记录。",
+    metadata: { worker_feedback: { id: 2, intent_id: 102, state: "stopped" } },
+  },
 ];
 
 export function activityForTask(): Activity[] {
@@ -2909,7 +3016,7 @@ export const trafficDetail: TrafficDetail = {
   req: `GET /v1/orders?id=1002 HTTP/1.1
 Host: api.acme.com
 Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
-User-Agent: ARTEX-worker/1.0
+User-Agent: SERIES-worker/1.0
 Accept: application/json
 
 `,
@@ -3152,15 +3259,15 @@ const promptVars: PromptVar[] = [
 ];
 
 const promptVersions: PromptVersion[] = [
-  { version: 3, ts: T("2026-07-25T10:00:00Z"), note: "加强越权探测引导", template_text: "你是 ARTEX 的规划者……" },
-  { version: 2, ts: T("2026-07-20T10:00:00Z"), note: "初版微调", template_text: "你是 ARTEX 的规划者(v2)……" },
+  { version: 3, ts: T("2026-07-25T10:00:00Z"), note: "加强越权探测引导", template_text: "你是 SERIES 的规划者……" },
+  { version: 2, ts: T("2026-07-20T10:00:00Z"), note: "初版微调", template_text: "你是 SERIES 的规划者(v2)……" },
 ];
 
 export function agentDetail(key: string): AgentDetail {
   const a = agents.find((x) => x.key === key) ?? agents[1];
   return {
     agent: a,
-    prompt: `你是 ARTEX 的「${a.name}」。\n目标：{{.Goal}}\n资产概览：{{.AssetSummary}}\n路线提示：{{.RouteHint}}\n请基于以上信息推进探索，并通过工具把结果写回图。`,
+    prompt: `你是 SERIES 的「${a.name}」。\n目标：{{.Goal}}\n资产概览：{{.AssetSummary}}\n路线提示：{{.RouteHint}}\n请基于以上信息推进探索，并通过工具把结果写回图。`,
     variables: promptVars,
     versions: promptVersions,
     visibility: { mcp: [1, 2], skill: ["api-recon", "playwright-cli"] },
@@ -3185,30 +3292,103 @@ export const mcpServers: MCPServer[] = [
     env: {},
     enabled: true,
     tools: ["host_info", "search", "dns_resolve"],
+    calls: 18,
+    tasks: 4,
+    usage_agents: ["worker", "planner"],
+    last_used: "2026-09-09T10:00:00Z",
   },
   {
     id: 2,
     name: "playwright",
     transport: "stdio",
     command: "npx",
-    args: ["-y", "@playwright/mcp"],
+    args: ["@playwright/mcp", "--headless"],
     env: {},
-    enabled: true,
+    enabled: false,
     tools: ["browser_navigate", "browser_click", "browser_snapshot"],
+    calls: 0,
+    tasks: 0,
+  },
+  {
+    id: 3,
+    name: "web_search",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "@zhafron/mcp-web-search"],
+    env: {},
+    enabled: false,
+    tools: [],
+    calls: 0,
+    tasks: 0,
+  },
+  {
+    id: 4,
+    name: "chrome-devtools",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "chrome-devtools-mcp", "--slim", "--headless"],
+    env: {},
+    enabled: false,
+    tools: [],
+    calls: 0,
+    tasks: 0,
   },
 ];
 
 export const mcpToolsById: Record<number, MCPTool[]> = {
   1: [
-    { name: "host_info", description: "查询某 IP 的 Shodan 主机信息" },
-    { name: "search", description: "Shodan 搜索" },
-    { name: "dns_resolve", description: "DNS 解析" },
+    { name: "host_info", description: "查询某 IP 的 Shodan 主机信息", calls: 8 },
+    { name: "search", description: "Shodan 搜索", calls: 7 },
+    { name: "dns_resolve", description: "DNS 解析", calls: 3 },
   ],
   2: [
     { name: "browser_navigate", description: "浏览器打开 URL" },
     { name: "browser_click", description: "点击元素" },
     { name: "browser_snapshot", description: "抓取可访问性快照" },
   ],
+  3: [],
+  4: [],
+};
+
+export const mcpUsageById: Record<
+  number,
+  { stats: import("../types").MCPUsageStat[]; calls: import("../types").MCPCall[] }
+> = {
+  1: {
+    stats: [
+      {
+        server_id: 1,
+        server_name: "shodan",
+        tool_name: "host_info",
+        calls: 8,
+        tasks: 3,
+        agents: ["worker"],
+        last_used: "2026-09-09T10:00:00Z",
+      },
+      {
+        server_id: 1,
+        server_name: "shodan",
+        tool_name: "search",
+        calls: 7,
+        tasks: 2,
+        agents: ["planner", "worker"],
+        last_used: "2026-09-08T18:20:00Z",
+      },
+      {
+        server_id: 1,
+        server_name: "shodan",
+        tool_name: "dns_resolve",
+        calls: 3,
+        tasks: 1,
+        agents: ["worker"],
+        last_used: "2026-09-07T12:05:00Z",
+      },
+    ],
+    calls: [
+      { ts: "2026-09-09T10:00:00Z", tool_name: "host_info", agent_key: "worker", task_id: 42, session_id: "" },
+      { ts: "2026-09-08T18:20:00Z", tool_name: "search", agent_key: "planner", task_id: 41, session_id: "" },
+    ],
+  },
 };
 
 // ── Skills ───────────────────────────────────────────────────────────────────
@@ -3234,14 +3414,6 @@ export const skills: SkillItem[] = [
     usage_agents: ["worker"],
     last_used: "2026-08-19T21:40:00Z",
   },
-  {
-    name: "scopesentry",
-    description: "从 ScopeSentry 拉取资产并归并到公司范围；批量导入资产时使用。",
-    files: ["SKILL.md", "assets/mapping.md"],
-    calls: 0,
-    tasks: 0,
-    usage_agents: [],
-  },
 ];
 
 export const skillCalls: SkillCall[] = [
@@ -3256,6 +3428,15 @@ export const missingSkills: MissingSkill[] = [
 
 // ── Tools ────────────────────────────────────────────────────────────────────
 export const tools: Tool[] = [
+  ...contextToolCatalog.map(
+    (entry): Tool => ({
+      ...entry,
+      system: true,
+      enabled: true,
+      kind: "builtin",
+      calls: 12,
+    }),
+  ),
   {
     key: "bash",
     system: true,
@@ -3295,15 +3476,21 @@ export const tools: Tool[] = [
     kind: "builtin",
     calls: 417,
   },
+
   {
-    key: "list_goals",
-    system: true,
-    description: "列出当前任务的目标与达成状态",
-    schema: { type: "object", properties: {} },
-    agents: ["planner"],
+    key: "nmap",
+    system: false,
+    description: "网络端口与服务扫描工具",
+    schema: {},
+    agents: ["worker"],
     enabled: true,
-    kind: "builtin",
-    calls: 238,
+    kind: "shell",
+    exec: {},
+    deferred: false,
+    directory: "/usr/local/bin",
+    usage_help: "nmap [options] target",
+    when_to_use: "需要探测目标开放端口和服务时",
+    calls: 54,
   },
   {
     key: "nuclei_scan",
@@ -3326,6 +3513,9 @@ export const tools: Tool[] = [
 export const settings: Settings = {
   traffic_capture: true,
   agent_traffic_binding: false,
+  traffic_skip_static: true,
+  traffic_skip_types: "",
+  traffic_retention_days: 30,
   llm_record: false,
   web_search_enabled: true,
   web_search_backend: "ddgs",
@@ -3333,11 +3523,13 @@ export const settings: Settings = {
   tavily_key_set: true,
   web_search_proxy: "",
   global_proxy: "",
+  shell_detected: { ok: true, os: "darwin", mode: "bash", path: "/bin/bash", interactive: true },
   python_interpreter: "/usr/bin/python3",
   workers: 3,
   llm_pool_enabled: true,
   llm_pool_bind_fallback: false,
   noa_compaction: false,
+  planner_overview_mode: "full",
 };
 
 // ── LLM 轮询（故障转移）──────────────────────────────────────────────────────
@@ -3938,25 +4130,6 @@ export const coverageGraph = {
 };
 
 // ── 资产在本任务关联的意图/事实/发现（/tasks/{id}/asset-refs）──
-// 播报板 demo:探索节点 → 其锚定资产。真实后端读 exploration_anchors,mock 里静态给几条。
-const NODE_ASSETS: Record<string, number[]> = {
-  fi1: [3],
-  fi2: [2, 4],
-  fi3: [5],
-  fiRce: [4],
-  fiPriv: [19],
-  fiJenkins: [21],
-  i1: [2],
-  i7: [4],
-};
-
-export function nodeAssetsFor(nodeId: string): FindingAsset[] {
-  return (NODE_ASSETS[nodeId] ?? []).flatMap((id) => {
-    const asset = assets.find((candidate) => candidate.id === id);
-    return asset ? [assetRef(id)] : [];
-  });
-}
-
 export function assetRefsFor(_assetId: number) {
   return {
     intents: [
@@ -3966,69 +4139,6 @@ export function assetRefsFor(_assetId: number) {
     facts: [{ id: 34, kind: "fact", state: "confirmed", summary: "search?q= 参数可注入，报错回显 MySQL 语法错误" }],
     findings: [{ id: 41, kind: "finding", state: "confirmed", summary: "[高] SQL 注入 www.acme.com/search?q=" }],
   };
-}
-
-// ── 工作空间文件管理器（/workspace/*，demo：静态示例树）──
-const WS_TREE: Record<string, { name: string; dir: boolean; size: number; content?: string }[]> = {
-  "": [
-    { name: "t-001", dir: true, size: 0 },
-    { name: "transcripts", dir: true, size: 0 },
-    {
-      name: "notes.md",
-      dir: false,
-      size: 96,
-      content: "# 工作区笔记\n\n（demo）这是工作空间根目录下的示例文件，可在线编辑并保存。\n",
-    },
-  ],
-  "t-001": [
-    { name: "i12", dir: true, size: 0 },
-    { name: "recon.txt", dir: false, size: 64, content: "acme.com\nwww.acme.com\napi.acme.com\nadmin.acme.com\n" },
-  ],
-  "t-001/i12": [
-    {
-      name: "exploit.py",
-      dir: false,
-      size: 220,
-      content:
-        "#!/usr/bin/env python3\n# (demo) SQLi PoC — www.acme.com/search?q=\nimport requests\n\nr = requests.get('https://www.acme.com/search', params={'q': \"1' OR '1'='1\"})\nprint(r.status_code, len(r.text))\n",
-    },
-    {
-      name: "response.html",
-      dir: false,
-      size: 180,
-      content: "<!-- (demo) 抓到的响应体片段 -->\n<html><body>MySQL error near ''1'='1'</body></html>\n",
-    },
-  ],
-  transcripts: [
-    { name: "exp1-worker-i12.jsonl", dir: false, size: 512, content: "（demo）原始 LLM 对话记录示例，此处省略。" },
-  ],
-};
-
-const wsClean = (p: string) => p.replace(/^\/+|\/+$/g, "");
-
-export function workspaceList(path: string) {
-  const key = wsClean(path);
-  const items = WS_TREE[key] ?? [];
-  const now = Date.parse("2026-08-09T03:00:00Z");
-  return {
-    path: key,
-    entries: items.map((it, i) => ({
-      name: it.name,
-      path: key ? `${key}/${it.name}` : it.name,
-      dir: it.dir,
-      size: it.size,
-      mtime: now - i * 3_600_000,
-    })),
-  };
-}
-
-export function workspaceRead(path: string) {
-  const key = wsClean(path);
-  const slash = key.lastIndexOf("/");
-  const parent = slash >= 0 ? key.slice(0, slash) : "";
-  const name = slash >= 0 ? key.slice(slash + 1) : key;
-  const f = (WS_TREE[parent] ?? []).find((x) => x.name === name && !x.dir);
-  return { path: key, size: f?.size ?? 0, binary: false, content: f?.content ?? "" };
 }
 
 // ── 工具执行历史（/commands）──

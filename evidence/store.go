@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/traffic"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/traffic"
 )
 
 type Store struct {
@@ -129,7 +129,7 @@ func (s *Store) StageFindingsExport(ctx context.Context, findings []*db.DBFindin
 			f.TrafficCount = len(list.Bindings)
 			f.EvidenceVersion = list.Version
 			f.ReportEvidenceVersion = list.ReportVersion
-			if err = tx.QueryRow(`SELECT report FROM findings WHERE id=$1`, f.ID).Scan(&f.Report); err != nil {
+			if err = tx.QueryRow(`SELECT report,COALESCE(reproduction,'null'::jsonb) FROM findings WHERE id=$1`, f.ID).Scan(&f.Report, &f.Reproduction); err != nil {
 				return err
 			}
 			for _, b := range list.Bindings {
@@ -181,14 +181,17 @@ func (s *Store) prepare(ctx context.Context, refs []db.TrafficRef) ([]db.Prepare
 
 func (s *Store) Record(ctx context.Context, in db.RecordFindingInput, refs []db.TrafficRef) (out *db.RecordedFinding, err error) {
 	err = s.DB.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
-		if err := db.LockTaskEvidenceTx(tx, in.TaskID); err != nil {
+		// The evidence lock already serializes rule delete/revoke. Defer the
+		// asset/task locks until RecordFindingTx: copying traffic bodies must not
+		// block unrelated asset discovery or approval while doing filesystem I/O.
+		if err := db.ValidateFindingSuppressionTx(tx, in); err != nil {
 			return err
 		}
 		prepared, err := s.prepare(ctx, refs)
 		if err != nil {
 			return err
 		}
-		out, err = db.RecordFindingTx(ctx, tx, in, prepared)
+		out, err = db.RecordFindingTx(tx, in, prepared)
 		return err
 	})
 	return

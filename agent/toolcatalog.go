@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -30,7 +31,7 @@ type ToolSeed struct {
 // 刻意【不含】SDK 通用工具 actool.DefaultTools()（Read/Write/Edit/MultiEdit/LS/Glob/
 // Grep/Bash）：它们每个 agent 都固定拥有、没有「绑定到谁」的取舍，且说明大多在 Prompt()
 // 里（本表只覆盖 Description()，会造成半覆盖误导）。不 seed → 无 DB 行 → ToolResolve
-// 原样放行、不覆盖，行为与从前一致。只有 artex 自己的领域工具入表可管。
+// 原样放行、不覆盖，行为与从前一致。只有 series 自己的领域工具入表可管。
 func builtinToolsByAgent() map[string][]actool.CoreTool {
 	ts := NewToolSet(nil, "")
 	return map[string][]actool.CoreTool{
@@ -42,21 +43,14 @@ func builtinToolsByAgent() map[string][]actool.CoreTool {
 		"goals": {ts.setGoals(), ts.setConstraints()},
 		// auto 默认绑漏洞上报 + 资产管理工具，其他域工具可在 UI 按需勾选。
 		// 新库由此 seed 写入；老库由 seedAutoDefaultBindings 迁移。
-		"auto": {ts.addFinding(), ts.insertAssets(), ts.addCompanyScope(), ts.listAssets(), ts.listCompanies()},
+		"auto": {ts.contextSearch(), ts.contextGet(), ts.graphOverview(), ts.addFinding(), ts.insertAssets(), ts.addCompanyScope(), ts.assetSearch(), ts.assetGet(), ts.listCompanies()},
 		// pentest（独立渗透 agent）默认绑：查资产 / 插资产 / 报漏洞 / 查漏洞 / 查企业。
 		// 新库由此 seed 写入；老库由 seedPentestDefaultBindings 迁移。
-		"pentest": {ts.listAssets(), ts.insertAssets(), ts.addFinding(), ts.listFindings(), ts.listCompanies()},
+		"pentest": {ts.assetSearch(), ts.assetGet(), ts.insertAssets(), ts.addFinding(), ts.contextSearch(), ts.contextGet(), ts.listCompanies()},
 	}
 }
 
-// defaultUnbound：这些 system 工具会照常入目录（web 端可见、可手动按 agent 勾选），但
-// 默认【不绑任何 agent】——ToolResolve 对空绑定的工具对所有 agent 一律丢弃,须显式 opt-in。
-// 之所以仍留在某个 agent 的 base 工具集里(如 goal_met 在 PlannerTools):一是让 seed 能
-// 构造它拿到 desc/schema,二是用户手动绑回后运行时 base 里有它、ToolResolve 才留得住。
-//
-// goal_met：绕过逐个 prove_goal、直接从全局宣布【整个任务完成】,权重大且有误判风险,又与
-// 「prove_goal 标记最后一个目标 → 自动收官」重复,故默认不给任何 agent,需要时再手动绑。
-var defaultUnbound = map[string]bool{"goal_met": true}
+var defaultUnbound = map[string]bool{}
 
 // BuiltinToolSeeds 把各 agent 的内置工具集去重合并成 seed 列表：同名工具（如 list_assets
 // 多个 agent 都有）合成一条，Agents 取并集；defaultUnbound 里的工具则强制绑定为空。
@@ -104,7 +98,7 @@ func BuiltinToolSeeds() []ToolSeed {
 // and wraps the rest so the model sees the DB-overridden description/schema and
 // 缺省入参 get injected. Tools with no matching DB row (MCP/skill/host tools like
 // traffic) pass through untouched. nil = tools unchanged. Wired in server/assembly.go.
-var ToolResolve func(ctx context.Context, agentKey string, tools []actool.CoreTool) []actool.CoreTool
+var ToolResolve func(ctx context.Context, agentKey string, tools []actool.CoreTool) ([]actool.CoreTool, error)
 
 // DecorateTool wraps t so Description()/InputSchema() report the DB overrides and
 // Call() injects scalar parameter defaults (from schema's "default" props) whenever
@@ -117,7 +111,12 @@ func DecorateTool(t actool.CoreTool, desc string, schema map[string]any) actool.
 	if len(schema) == 0 {
 		schema = t.InputSchema()
 	}
-	return &overriddenTool{CoreTool: t, desc: desc, schema: schema}
+	// Naming and batching are handler contracts, not editable prose. Retain the
+	// rule when an existing database description overrides the built-in text.
+	if t.Name() == "record_fact" && !strings.Contains(desc, factWriteContract) {
+		desc = factWriteContract + "\n" + desc
+	}
+	return &overriddenTool{CoreTool: t, desc: desc, schema: schema, validation: normalizeToolSchema(schema)}
 }
 
 // overriddenTool is a CoreTool decorator: it embeds the original (so all behavioral
@@ -125,77 +124,47 @@ func DecorateTool(t actool.CoreTool, desc string, schema map[string]any) actool.
 // and overrides only the model-facing description/schema plus default injection.
 type overriddenTool struct {
 	actool.CoreTool
-	desc   string
-	schema map[string]any
+	desc       string
+	schema     map[string]any
+	validation map[string]any
 }
 
 func (o *overriddenTool) Description() string         { return o.desc }
 func (o *overriddenTool) InputSchema() map[string]any { return o.schema }
 
+// Defaults must be applied before approval, including required defaulted fields.
+// Validation remains mandatory in both the host hook and execution boundary.
+func (o *overriddenTool) AcceptsRawInput() bool { return true }
+
+func (o *overriddenTool) PrepareInput(in json.RawMessage) (json.RawMessage, error) {
+	// Search's explicit empty q/state/severity clear filters. Replacing them
+	// with configured defaults can silently omit existing planning directions.
+	resolved := injectDefaults(in, o.schema, o.Name() == "context_search")
+	return resolved, validateBusinessInput(o.validation, resolved)
+}
+
 func (o *overriddenTool) Call(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
-	return o.CoreTool.Call(ctx, injectDefaults(in, o.schema), tc)
-}
-
-// injectDefaults fills scalar parameter defaults declared in the (possibly edited)
-// schema into the input JSON whenever the model omitted the field or left it empty/
-// null. Structure (names/types/required) is untouched — only缺省值 are merged in.
-func injectDefaults(in json.RawMessage, schema map[string]any) json.RawMessage {
-	defs := scalarDefaults(schema)
-	if len(defs) == 0 {
-		return in
-	}
-	m := map[string]json.RawMessage{}
-	if len(in) > 0 {
-		if err := json.Unmarshal(in, &m); err != nil {
-			return in // non-object input: don't touch it
-		}
-	}
-	changed := false
-	for k, dv := range defs {
-		if cur, ok := m[k]; !ok || isEmptyJSON(cur) {
-			m[k] = dv
-			changed = true
-		}
-	}
-	if !changed {
-		return in
-	}
-	b, err := json.Marshal(m)
+	resolved, err := o.PrepareInput(in)
 	if err != nil {
-		return in
+		return actool.Errorf("参数错误: " + err.Error()), nil
 	}
-	return b
+	return o.CoreTool.Call(ctx, resolved, tc)
 }
 
-// scalarDefaults extracts properties[k]["default"] for scalar params (string/
-// integer/number/boolean). Array/object defaults are skipped: merging them is
-// ambiguous and not worth the surprise.
-func scalarDefaults(schema map[string]any) map[string]json.RawMessage {
-	props, _ := schema["properties"].(map[string]any)
-	if len(props) == 0 {
-		return nil
-	}
-	out := map[string]json.RawMessage{}
-	for name, raw := range props {
-		p, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		dv, ok := p["default"]
-		if !ok || dv == nil {
-			continue
-		}
-		switch p["type"] {
-		case "string", "integer", "number", "boolean":
-			if b, err := json.Marshal(dv); err == nil {
-				out[name] = b
-			}
-		}
-	}
-	return out
+// promptOverrideTool replaces a tool's extended Prompt text. norma renders the
+// provider-facing description as Description() + "\n\n" + Prompt() (see
+// Registry.Schemas), so overriding Prompt() is the only SERIES-side seam for
+// dropping or rewording guidance that only exists inside the SDK module.
+type promptOverrideTool struct {
+	actool.CoreTool
+	prompt string
 }
 
-func isEmptyJSON(raw json.RawMessage) bool {
-	s := string(raw)
-	return s == "null" || s == `""`
+// OverrideToolPrompt returns t with its extended Prompt replaced by prompt
+// (empty = no extended text at all). Everything else, including Call and
+// PrepareInput, keeps delegating to t.
+func OverrideToolPrompt(t actool.CoreTool, prompt string) actool.CoreTool {
+	return &promptOverrideTool{CoreTool: t, prompt: prompt}
 }
+
+func (p *promptOverrideTool) Prompt() string { return p.prompt }

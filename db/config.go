@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -124,8 +125,12 @@ func (d *DB) ActiveProfile() (*LLMProfile, error) {
 // ProfileByID returns one profile with its api key by id, or nil if not found.
 // Used to run a task on a specific (non-default) LLM profile.
 func (d *DB) ProfileByID(id int64) (*LLMProfile, error) {
+	return d.ProfileByIDContext(context.Background(), id)
+}
+
+func (d *DB) ProfileByIDContext(ctx context.Context, id int64) (*LLMProfile, error) {
 	var p LLMProfile
-	err := scanProfile(d.QueryRow(`SELECT `+profileColsKey+` FROM llm_profiles WHERE id=$1`, id), &p.APIKey, &p)
+	err := scanProfile(d.QueryRowContext(ctx, `SELECT `+profileColsKey+` FROM llm_profiles WHERE id=$1`, id), &p.APIKey, &p)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -158,6 +163,10 @@ ORDER BY is_default DESC, priority DESC, id ASC`)
 
 // SaveProfile inserts (id==0) or updates a profile. Empty apiKey on update keeps existing.
 func (d *DB) SaveProfile(p *LLMProfile) (int64, error) {
+	// Optional header names are persisted as a stable empty-string sentinel.
+	// Trimming here keeps both INSERT and UPDATE paths consistent and avoids
+	// storing whitespace-only values that would later be emitted as a header.
+	p.SessionHeaderKey = strings.TrimSpace(p.SessionHeaderKey)
 	hint := p.APIKeyHint
 	if len(p.APIKey) >= 4 {
 		hint = "…" + p.APIKey[len(p.APIKey)-4:]
@@ -807,16 +816,20 @@ func (d *DB) ListPromptVersions(agentID int64) ([]PromptVersion, error) {
 // ---------- MCP servers ----------
 
 type MCPServer struct {
-	ID        int64           `json:"id"`
-	Name      string          `json:"name"`
-	Transport string          `json:"transport"`
-	Command   string          `json:"command,omitempty"`
-	Args      json.RawMessage `json:"args"`
-	Env       json.RawMessage `json:"env"`
-	URL       string          `json:"url,omitempty"`
-	Enabled   bool            `json:"enabled"`
-	Insecure  bool            `json:"insecure"` // http: skip TLS cert verification (self-signed servers, issue #108)
-	Tools     []string        `json:"tools,omitempty"` // cached tool names (mcp_tools_cache)
+	ID          int64           `json:"id"`
+	Name        string          `json:"name"`
+	Transport   string          `json:"transport"`
+	Command     string          `json:"command,omitempty"`
+	Args        json.RawMessage `json:"args"`
+	Env         json.RawMessage `json:"env"`
+	URL         string          `json:"url,omitempty"`
+	Enabled     bool            `json:"enabled"`
+	Tools       []string        `json:"tools,omitempty"` // cached tool names (mcp_tools_cache)
+	Calls       int             `json:"calls"`
+	Tasks       int             `json:"tasks"`
+	UsageAgents []string        `json:"usage_agents,omitempty"`
+	LastUsed    *time.Time      `json:"last_used,omitempty"`
+	Insecure    bool            `json:"insecure"` // HTTP only: opt-in TLS verification bypass.
 }
 
 func (d *DB) ListMCP() ([]*MCPServer, error) {
@@ -844,6 +857,13 @@ func (d *DB) ListMCP() ([]*MCPServer, error) {
 	for _, m := range out {
 		m.Tools, _ = d.MCPToolNames(m.ID)
 	}
+	if stats, err := d.MCPServerUsageStats(); err == nil {
+		for _, m := range out {
+			if st, ok := stats[m.ID]; ok {
+				m.Calls, m.Tasks, m.UsageAgents, m.LastUsed = st.Calls, st.Tasks, st.Agents, st.LastUsed
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -869,11 +889,19 @@ func (d *DB) MCPToolNames(serverID int64) ([]string, error) {
 type MCPTool struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Calls       int    `json:"calls"`
+}
+
+type MCPImportResult struct {
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Action string `json:"action"`
 }
 
 // MCPToolsDetailed returns the cached tools (name + description) for a server.
 func (d *DB) MCPToolsDetailed(serverID int64) ([]MCPTool, error) {
-	rows, err := d.Query(`SELECT tool_name, COALESCE(description,'') FROM mcp_tools_cache WHERE server_id=$1 ORDER BY tool_name`, serverID)
+	rows, err := d.Query(`SELECT tool_name, COALESCE(description,'')
+FROM mcp_tools_cache WHERE server_id=$1 ORDER BY tool_name`, serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -886,7 +914,28 @@ func (d *DB) MCPToolsDetailed(serverID int64) ([]MCPTool, error) {
 		}
 		out = append(out, t)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	// Release the connection before querying the usage ledger. This matters for
+	// test/single-connection pools and keeps the cache query independent from
+	// the aggregate query below.
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	stats, err := d.MCPToolUsageStats(serverID)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]int, len(stats))
+	for _, stat := range stats {
+		byName[stat.ToolName] = stat.Calls
+	}
+	for i := range out {
+		out[i].Calls = byName[out[i].Name]
+	}
+	return out, nil
 }
 
 // SaveMCPTools replaces the cached tool list for a server (called after discovery).
@@ -925,6 +974,52 @@ func (d *DB) SaveMCP(m *MCPServer) (int64, error) {
 	_, err := d.Exec(`UPDATE mcp_servers SET name=$1,transport=$2,command=NULLIF($3,''),args=$4,env=$5,url=NULLIF($6,''),enabled=$7,insecure=$8 WHERE id=$9`,
 		m.Name, m.Transport, m.Command, args, env, m.URL, m.Enabled, m.Insecure, m.ID)
 	return m.ID, err
+}
+
+// ImportMCP upserts a normalized MCP batch atomically. Existing IDs and agent
+// visibility are retained; only stale tool discovery cache rows are cleared.
+func (d *DB) ImportMCP(servers []*MCPServer) ([]MCPImportResult, error) {
+	tx, err := d.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	results := make([]MCPImportResult, 0, len(servers))
+	for _, m := range servers {
+		args, env := string(m.Args), string(m.Env)
+		if args == "" {
+			args = "[]"
+		}
+		if env == "" {
+			env = "{}"
+		}
+
+		var id int64
+		err := tx.QueryRow(`INSERT INTO mcp_servers(name,transport,command,args,env,url,enabled,insecure)
+VALUES ($1,$2,NULLIF($3,''),$4,$5,NULLIF($6,''),$7,$8)
+ON CONFLICT (name) DO NOTHING
+RETURNING id`, m.Name, m.Transport, m.Command, args, env, m.URL, m.Enabled, m.Insecure).Scan(&id)
+		action := "created"
+		if errors.Is(err, sql.ErrNoRows) {
+			action = "updated"
+			err = tx.QueryRow(`UPDATE mcp_servers
+SET transport=$2,command=NULLIF($3,''),args=$4,env=$5,url=NULLIF($6,''),enabled=$7,insecure=$8
+WHERE name=$1 RETURNING id`, m.Name, m.Transport, m.Command, args, env, m.URL, m.Enabled, m.Insecure).Scan(&id)
+			if err == nil {
+				_, err = tx.Exec(`DELETE FROM mcp_tools_cache WHERE server_id=$1`, id)
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("import mcp %q: %w", m.Name, err)
+		}
+		m.ID = id
+		results = append(results, MCPImportResult{ID: id, Name: m.Name, Action: action})
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 func (d *DB) DeleteMCP(id int64) error {

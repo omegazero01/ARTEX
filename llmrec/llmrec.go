@@ -8,16 +8,78 @@ import (
 	"encoding/json"
 	"iter"
 	"log"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/transcript"
+	"github.com/neouks/series/db"
 )
 
 type taskIDContextKey struct{}
-type workerContextKey struct{}
+type runInfoContextKey struct{}
+
+// RunInfo carries request attribution that cannot be recovered reliably from a
+// transcript session id alone. It lives in llmrec (rather than agent) so the
+// recorder can read it without an import cycle.
+type RunInfo struct {
+	TaskID        int64
+	ExplorationID int64
+	IntentID      int64
+	SessionID     string
+	AgentKey      string
+	Trigger       string
+	RetryOrdinal  int
+	Phase         string
+}
+
+// WithRunInfo merges non-zero attribution into the current context. Merging lets
+// the engine attach trigger/retry data before the agent adds task/run identity.
+func WithRunInfo(ctx context.Context, next RunInfo) context.Context {
+	current := RunInfoFrom(ctx)
+	if next.TaskID > 0 {
+		current.TaskID = next.TaskID
+	}
+	if next.ExplorationID > 0 {
+		current.ExplorationID = next.ExplorationID
+	}
+	if next.IntentID > 0 {
+		current.IntentID = next.IntentID
+	}
+	if next.SessionID != "" {
+		current.SessionID = next.SessionID
+	}
+	if next.AgentKey != "" {
+		current.AgentKey = next.AgentKey
+	}
+	if next.Trigger != "" {
+		current.Trigger = next.Trigger
+	}
+	if next.RetryOrdinal > 0 {
+		current.RetryOrdinal = next.RetryOrdinal
+	}
+	if next.Phase != "" {
+		current.Phase = next.Phase
+	}
+	return context.WithValue(ctx, runInfoContextKey{}, current)
+}
+
+func RunInfoFrom(ctx context.Context) RunInfo {
+	if ctx == nil {
+		return RunInfo{}
+	}
+	info, _ := ctx.Value(runInfoContextKey{}).(RunInfo)
+	return info
+}
+
+// WithIndependentRunInfo starts distinct attribution while retaining unrelated
+// context values. Unlike WithRunInfo it cannot inherit an intent or retry from
+// the caller that launched a detached run.
+func WithIndependentRunInfo(ctx context.Context, info RunInfo) context.Context {
+	return context.WithValue(ctx, runInfoContextKey{}, info)
+}
 
 // WithTaskID attaches the owning task registry id to an LLM call. Session ids
 // are based on exploration ids, which are not interchangeable with task ids.
@@ -36,28 +98,6 @@ func TaskIDFrom(ctx context.Context) string {
 	}
 	taskID, _ := ctx.Value(taskIDContextKey{}).(string)
 	return strings.TrimSpace(taskID)
-}
-
-// WithWorker overrides the agent-lane ("worker") label for an LLM call. The lane
-// is normally parsed from the transcript session id (exp<N>-<role>); calls made
-// outside the engine's worker/planner sessions — e.g. the intercept fallback judge
-// — carry no such session, so they attach their lane explicitly here. This lets the
-// usage ledger single out that spend (worker='judge') for the config page.
-func WithWorker(ctx context.Context, worker string) context.Context {
-	worker = strings.TrimSpace(worker)
-	if worker == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, workerContextKey{}, worker)
-}
-
-// workerFrom returns the explicit lane override, or "" when none is set.
-func workerFrom(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
-	worker, _ := ctx.Value(workerContextKey{}).(string)
-	return strings.TrimSpace(worker)
 }
 
 // Recorder wraps an llm.Provider and records every completion call.
@@ -124,11 +164,18 @@ func (r *Recorder) Stream(ctx context.Context, req llm.CompletionRequest) iter.S
 	start := time.Now()
 	session := transcript.SessionIDFrom(ctx)
 	parsedID, worker := parseSession(session)
-	if ov := workerFrom(ctx); ov != "" {
-		worker = ov
-	}
 	expID := db.ParseExpID(parsedID)
 	taskID := TaskIDFrom(ctx)
+	runInfo := RunInfoFrom(ctx)
+	if runInfo.ExplorationID > 0 {
+		expID = runInfo.ExplorationID
+	}
+	if runInfo.TaskID > 0 {
+		taskID = strconv.FormatInt(runInfo.TaskID, 10)
+	}
+	if runInfo.AgentKey != "" {
+		worker = runInfo.AgentKey
+	}
 	if taskID == "" {
 		// Backward compatibility for non-task callers. For task calls, the task
 		// runtime always supplies the registry id explicitly.
@@ -167,7 +214,7 @@ func (r *Recorder) Stream(ctx context.Context, req llm.CompletionRequest) iter.S
 				status = "error"
 			}
 			// Lightweight metering row — always written.
-			r.recordUsage(taskID, expID, worker, usage, int(time.Since(start).Milliseconds()), status)
+			r.recordUsage(taskID, expID, worker, runInfo, req, usage, int(time.Since(start).Milliseconds()), status)
 			// Heavy trace row — only when body recording is on.
 			if recordBodies {
 				r.record(req, session, taskID, worker, reqBody, capt, start, textBuf.String(), thinkingBuf.String(), usage, stopReason, err)
@@ -224,11 +271,18 @@ func (r *Recorder) Complete(ctx context.Context, req llm.CompletionRequest) (llm
 	start := time.Now()
 	session := transcript.SessionIDFrom(ctx)
 	parsedID, worker := parseSession(session)
-	if ov := workerFrom(ctx); ov != "" {
-		worker = ov
-	}
 	expID := db.ParseExpID(parsedID)
 	taskID := TaskIDFrom(ctx)
+	runInfo := RunInfoFrom(ctx)
+	if runInfo.ExplorationID > 0 {
+		expID = runInfo.ExplorationID
+	}
+	if runInfo.TaskID > 0 {
+		taskID = strconv.FormatInt(runInfo.TaskID, 10)
+	}
+	if runInfo.AgentKey != "" {
+		worker = runInfo.AgentKey
+	}
 	if taskID == "" {
 		taskID = parsedID
 	}
@@ -245,7 +299,7 @@ func (r *Recorder) Complete(ctx context.Context, req llm.CompletionRequest) (llm
 	if err != nil {
 		status = "error"
 	}
-	r.recordUsage(taskID, expID, worker, usage, int(time.Since(start).Milliseconds()), status)
+	r.recordUsage(taskID, expID, worker, runInfo, req, usage, int(time.Since(start).Milliseconds()), status)
 	if recordBodies {
 		r.record(req, session, taskID, worker, reqBody, capt, start, msg.Text(), thinkingText(msg), usage, stopReason, err)
 	}
@@ -264,7 +318,7 @@ func thinkingText(msg llm.Message) string {
 
 // recordUsage appends one lightweight metering row to llm_usage (no bodies). Skips
 // zero-token calls with no model, which carry nothing worth metering.
-func (r *Recorder) recordUsage(taskID string, expID int64, worker string, usage llm.Usage, latencyMs int, status string) {
+func (r *Recorder) recordUsage(taskID string, expID int64, worker string, runInfo RunInfo, req llm.CompletionRequest, usage llm.Usage, latencyMs int, status string) {
 	if r.pg == nil {
 		return
 	}
@@ -272,22 +326,59 @@ func (r *Recorder) recordUsage(taskID string, expID int64, worker string, usage 
 		usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
 		return
 	}
+	dims := requestDimensionsFor(req)
+	phase := runInfo.Phase
+	if req.Thinking == "disabled" {
+		phase = "compaction"
+	} else if phase == "" {
+		phase = "normal"
+	}
 	err := r.pg.InsertLLMUsage(&db.LLMUsage{
-		TaskID:        taskID,
-		ExplorationID: expID,
-		Worker:        worker,
-		Model:         r.model,
-		ProfileName:   r.prof,
-		LatencyMs:     latencyMs,
-		InputTokens:   usage.InputTokens,
-		OutputTokens:  usage.OutputTokens,
-		CacheRead:     usage.CacheReadTokens,
-		CacheWrite:    usage.CacheWriteTokens,
-		Status:        status,
+		TaskID:               taskID,
+		ExplorationID:        expID,
+		IntentID:             runInfo.IntentID,
+		Worker:               worker,
+		Trigger:              runInfo.Trigger,
+		RetryOrdinal:         runInfo.RetryOrdinal,
+		Phase:                phase,
+		Model:                r.model,
+		ProfileName:          r.prof,
+		LatencyMs:            latencyMs,
+		InputTokens:          usage.InputTokens,
+		OutputTokens:         usage.OutputTokens,
+		CacheRead:            usage.CacheReadTokens,
+		CacheWrite:           usage.CacheWriteTokens,
+		SystemChars:          dims.system,
+		MessageChars:         dims.messages,
+		ToolChars:            dims.tools,
+		RequestChars:         dims.total,
+		EstimatedInputTokens: (dims.total + 3) / 4,
+		Status:               status,
 	})
 	if err != nil {
 		log.Printf("[llmusage] insert: %v", err)
 	}
+}
+
+type requestDimensions struct {
+	system, messages, tools, total int
+}
+
+func requestDimensionsFor(req llm.CompletionRequest) requestDimensions {
+	serializedRunes := func(value any) int {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return 0
+		}
+		return utf8.RuneCount(raw)
+	}
+	dims := requestDimensions{
+		system:   serializedRunes(req.System),
+		messages: serializedRunes(req.Messages),
+		tools:    serializedRunes(req.Tools),
+	}
+	dims.total = dims.system + dims.messages + dims.tools
+	return dims
 }
 
 // record persists one LLM call to PostgreSQL before the provider stream returns.

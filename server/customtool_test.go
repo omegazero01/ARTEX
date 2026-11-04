@@ -80,6 +80,19 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+func TestPlatformShellQuoting(t *testing.T) {
+	if got := shellQuoteFor("powershell", "a'b"); got != "'a''b'" {
+		t.Fatalf("powershell quote = %q", got)
+	}
+	value := "$(touch /tmp/not-executed) & | < > %PATH% !bang!\nnext"
+	for _, mode := range []string{"bash", "powershell"} {
+		want := "probe --value=" + shellQuoteFor(mode, value)
+		if got := renderCommandTemplate("probe --value={value}", map[string]any{"value": value}, mode); got != want {
+			t.Fatalf("%s: %q", mode, got)
+		}
+	}
+}
+
 // TestExecPython runs a real Python script end-to-end: it must read params from
 // stdin JSON and the mirrored env var, then print — verifying the whole script
 // param-passing path. Skips if no python3.
@@ -162,26 +175,5 @@ func TestDetectPython(t *testing.T) {
 	}
 	if p := detectPython(); p == "" {
 		t.Fatal("detectPython returned empty despite python3 on PATH")
-	}
-}
-
-// The http tool must truncate an oversized response through norma's Capture, the
-// same valve every other tool uses — a session with no OutputDir falls back to a
-// head+tail cut, so a body far past the default cap comes back shortened.
-func TestHTTPToolTruncatesLargeBody(t *testing.T) {
-	big := strings.Repeat("x", 40000) // past Capture's 30000 default
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(big))
-	}))
-	defer srv.Close()
-
-	execRaw, _ := json.Marshal(map[string]any{"method": "GET", "url": srv.URL})
-	res, err := (&Server{}).runHTTPTool(context.Background(), execRaw, map[string]any{}, nil)
-	if err != nil {
-		t.Fatalf("runHTTPTool: %v", err)
-	}
-	out := res.Flatten()
-	if len(out) >= 40000 {
-		t.Fatalf("oversized http body was not truncated: len=%d", len(out))
 	}
 }

@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/guard"
-	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/guard"
+	"github.com/neouks/series/intercept"
 )
 
 // ChatAgent is the generic, task-independent conversational runner behind the chat
@@ -31,10 +31,22 @@ type ChatAgent struct {
 	proxyAddr      string
 	proxyCACert    string
 	webSearch      WebSearchOpts
-	guard          *guard.Guard // optional; nil disables intercept hooks for chat
-	nonStreamingFn func() bool  // resolver: use non-streaming (Complete) path? (nil = streaming)
-	noaEnabledFn   func() bool  // resolver: use experimental noa compaction? (nil = off)
-	maxTokensFn    func() int   // resolver: per-reply output cap (nil/0 = send no cap)
+	guard          *guard.Guard               // optional; nil disables intercept hooks for chat
+	nonStreamingFn func() bool                // resolver: use non-streaming (Complete) path? (nil = streaming)
+	noaEnabledFn   func() bool                // resolver: use experimental noa compaction? (nil = off)
+	ctxPolicyFn    func() ContextPolicyConfig // resolver: 自定义上下文线(清理/摘要)，nil = 内置窗口推导
+	maxTokensFn    func() int                 // resolver: per-reply output cap (nil/0 = send no cap)
+	taskAssets     *db.AssetStore
+	taskID         int64
+}
+
+// WithTaskPolicy returns a per-run copy; shared independent chat configuration
+// must never acquire another conversation's task scope.
+func (c *ChatAgent) WithTaskPolicy(as *db.AssetStore, taskID int64, proxy, ca string, g *guard.Guard) *ChatAgent {
+	out := *c
+	out.taskAssets, out.taskID, out.guard = as, taskID, g
+	out.proxyAddr, out.proxyCACert = TaskProxyAddr(proxy, ca, taskID), ca
+	return &out
 }
 
 func NewChatAgent(prov llm.Provider, model, workDir string, tx *transcript.Store, window int) *ChatAgent {
@@ -51,6 +63,12 @@ func (c *ChatAgent) nonStreaming() bool { return c.nonStreamingFn != nil && c.no
 // noa context-compression mechanism. nil/unset = off (built-in compaction). Read
 // per run so the settings toggle takes effect without rebuilding the agent.
 func (c *ChatAgent) SetNoaEnabled(fn func() bool) { c.noaEnabledFn = fn }
+
+// SetContextPolicy wires a resolver returning the custom context lines (tool-result
+// clear line / history summary line). nil or all-zero = keep the SDK's window-derived
+// defaults, i.e. behaviour identical to before this feature. Read per run, so a
+// settings change takes effect on the next run without rebuilding the agent.
+func (c *ChatAgent) SetContextPolicy(fn func() ContextPolicyConfig) { c.ctxPolicyFn = fn }
 
 // SetMaxTokens wires a resolver for the per-reply output cap. nil/unset or 0 =
 // send no cap and let the endpoint decide. Read per run, like nonStreaming.
@@ -119,13 +137,16 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	// visible skills/MCP and lets the DB tools table filter/override. DefaultTools
 	// have no tools-table rows, so they always pass through.
 	base := actool.DefaultTools()
-	ctx = WithRunInfo(ctx, RunInfo{SessionID: sessionID})
-	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
+	ctx = WithRunInfo(ctx, RunInfo{SessionID: sessionID, AgentKey: agentKey, TaskID: c.taskID, Trigger: "human_message"})
+	tools, def, cleanup, err := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
+	if err != nil {
+		return "", err
+	}
 
 	system, boundary := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir), def)
 	opts := agentcore.Options{
-		Provider:        c.prov,
+		Provider:        withAssetContext(c.prov, c.taskAssets, c.taskID),
 		SystemPrompt:    system,
 		DynamicBoundary: boundary,
 		Tools:           tools,
@@ -141,9 +162,6 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		WebSearchBackend:      ws.Backend,
 		BraveSearchAPIKey:     ws.BraveKey,
 		TavilySearchAPIKey:    ws.TavilyKey,
-		DeepSeekSearchBaseURL: ws.DeepSeekBaseURL,
-		DeepSeekSearchAPIKey:  ws.DeepSeekAPIKey,
-		DeepSeekSearchModel:   ws.DeepSeekModel,
 		WebSearchProxy:        ws.Proxy,
 		BashEnv:               proxyEnv(c.proxyAddr, c.proxyCACert), // Bash 子命令默认走代理+信任 CA
 		WorkingDir:            sessionWorkDir,
@@ -151,16 +169,21 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		MaxDuration:           maxDuration,
 		Compaction:            compactionConfig(c.window),
 		Todos:                 actool.NewTodoStore(),
+		DeepSeekSearchBaseURL: ws.DeepSeekBaseURL,
+		DeepSeekSearchAPIKey:  ws.DeepSeekAPIKey,
+		DeepSeekSearchModel:   ws.DeepSeekModel,
 		// large tool output spills to cmd-output/ under the session dir.
 		// 截断上限用 SDK 默认(tool.Capture 的 30000 字符)。
 		ToolOutputDir: filepath.Join(sessionWorkDir, "cmd-output"),
 		// 命中预算(步数)→ SDK 跑收尾:输出一句总结。Prompt 与收尾轮数按本 agent key 后台可编辑
 		// (自定义 agent 各自一份;留空/0 用通用默认:10 轮)。
-		Settlement:   wrapupSettlement(agentKey, nil),
+		Settlement:   wrapupSettlement(agentKey),
 		NonStreaming: c.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:    c.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
 	}
-	if c.guard != nil {
+	if c.taskAssets != nil && c.taskID > 0 {
+		opts.Hooks = guard.AssetPolicyHooksWithGuard(c.guard, c.taskAssets, c.taskID)
+	} else if c.guard != nil {
 		opts.Hooks = c.guard.Hooks()
 	}
 	if c.tx != nil { // persist raw human↔AI conversation; one accumulating file per thread
@@ -169,9 +192,14 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	}
 	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。
 	enableNoa(&opts, c.noaEnabledFn, c.workDir, "chat-"+sessionID, noaWarn("chat-"+sessionID))
+	// 自定义上下文线（清理/摘要），未配置时保持内置窗口推导。
+	applyContextPolicy(&opts, c.ctxPolicyFn, c.window)
 	ctx = attachSideCapture(ctx, &opts)
-	s := agentcore.NewSession(opts)
-	defer s.Close()
+	s, closeSession, err := newSession(opts)
+	if err != nil {
+		return "", err
+	}
+	defer closeSession()
 	// reload prior conversation so the agent has context across turns (each Chat is
 	// a fresh session). First turn: no file yet → Resume loads nothing and proceeds.
 	if c.tx != nil {

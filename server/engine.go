@@ -11,12 +11,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/neouks/series/agent"
+	"github.com/neouks/series/db"
+	"github.com/neouks/series/guard"
+	"github.com/neouks/series/intercept"
 )
 
 // isFKViolation reports whether err is a Postgres foreign-key violation (SQLSTATE
@@ -96,6 +97,9 @@ type Engine struct {
 
 	bc *Broadcaster // live activity pub/sub (SSE)
 
+	mu       sync.RWMutex
+	planner  *agent.Planner
+	worker   *agent.Worker
 	started  sync.Map // taskID -> bool, so Run is idempotent per task
 	lastAct  sync.Map // taskID -> int64 unix, last planner/worker activity (heartbeat)
 	llmCalls sync.Map // taskID -> *int64, actual planner/worker/main-agent LLM calls
@@ -134,7 +138,11 @@ type Engine struct {
 	steerMu  sync.Mutex
 	steerBox map[int64][]string
 
-	plannerRound sync.Map // taskID -> int, planner round counter (for UI round separators)
+	plannerRound  sync.Map // taskID -> int, planner round counter (for UI round separators)
+	plannerActive sync.Map // live planner calls only; read-only activity views must not guess from task status
+	// Last successfully planned semantic revision. Unchanged heartbeats never
+	// call the Planner model, including while Workers are running.
+	plannerRevision sync.Map // taskID -> string
 
 	// 任务级超时(见 docs/任务级超时与收尾设计.md):
 	settling     sync.Map // taskID -> bool, 任务已进入收尾时序(停止派/领新意图)
@@ -143,14 +151,11 @@ type Engine struct {
 	inflight     sync.Map // taskID -> *int64, 在跑的 planner.Plan + worker.Execute 计数(用于 drain)
 	coordStarted sync.Map // taskID -> bool, deadline 协调器是否已启动(Run/reload 去重)
 
-	// resolve returns a task's dedicated planner/worker (wired by the server as the
-	// authoritative task-router). nil,nil means this task is deliberately unavailable
-	// (for example an exhausted failover chain) — there is no global-pair fallback.
+	// resolve, if set, returns a task's dedicated planner/worker. In legacy mode
+	// nil,nil falls back to the global pair; an authoritative resolver uses nil,nil
+	// to mean this task is deliberately unavailable (for example an exhausted chain).
 	resolve              func(t *Task) (*agent.Planner, *agent.Worker)
 	resolveAuthoritative bool
-	// readiness reports whether a global LLM provider is configured — the signal behind
-	// Ready()/the llm_configured indicator. Wired once at startup; nil → not ready.
-	readiness func() bool
 }
 
 type taskRuntime struct {
@@ -280,6 +285,7 @@ func (e *Engine) StopTask(taskID string) {
 	e.paused.Delete(taskID)
 	e.dropCnt.Delete(taskID)
 	e.plannerRound.Delete(taskID)
+	e.plannerRevision.Delete(taskID)
 	e.settling.Delete(taskID)
 	e.deadline.Delete(taskID)
 	e.stamped.Delete(taskID)
@@ -401,8 +407,8 @@ func (e *Engine) registerWork(intentID int64, cancel context.CancelCauseFunc) {
 }
 
 // detachWork removes the live control handle once Execute has returned. complete
-// must be called after the final intent state write so a waiting cancel handler can
-// safely delete the worker's blackboard output without racing a late write.
+// must be called after the final state write so a waiting controller can safely
+// finish cancellation without racing a late Worker write.
 func (e *Engine) detachWork(intentID int64) (action string, complete func(error)) {
 	e.workMu.Lock()
 	run := e.work[intentID]
@@ -421,15 +427,27 @@ func (e *Engine) detachWork(intentID int64) (action string, complete func(error)
 	return action, func(err error) { run.done <- err }
 }
 
-// ControlWork requests a user-visible pause or cancellation and waits until the
-// worker has fully stopped writing. Cancellation cleanup is performed by the API
-// handler after this returns; pause state is committed by runWorkerStep itself.
+// ControlWork requests a user pause/cancellation and waits until the worker has
+// stopped writing. The API then records the user cancellation without deleting output.
 func (e *Engine) ControlWork(ctx context.Context, intentID int64, action string) error {
 	if action != "pause" && action != "cancel" {
 		return fmt.Errorf("unsupported work action %q", action)
 	}
+	cause := error(agent.AbortWorkPausedByUser)
+	if action == "cancel" {
+		cause = agent.AbortWorkCancelledByUser
+	}
+	return e.controlWork(ctx, intentID, action, cause)
+}
+
+// controlWork also supports the internal planner kill action. Settlement errors
+// propagate to the caller, so sending a signal alone never counts as success.
+func (e *Engine) controlWork(ctx context.Context, intentID int64, action string, cause error) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	e.workMu.Lock()
 	run := e.work[intentID]
@@ -443,10 +461,6 @@ func (e *Engine) ControlWork(ctx context.Context, intentID int64, action string)
 	}
 	run.action = action
 	done := run.done
-	cause := error(agent.AbortWorkPausedByUser)
-	if action == "cancel" {
-		cause = agent.AbortWorkCancelledByUser
-	}
 	run.cancel(cause)
 	e.workMu.Unlock()
 
@@ -592,6 +606,15 @@ func (h steerHooks) PostToolUse(ctx context.Context, name string, input, result 
 	}
 }
 
+func (h steerHooks) RecheckToolInput(ctx context.Context, name string, input []byte) string {
+	if policy, ok := h.inner.(interface {
+		RecheckToolInput(context.Context, string, []byte) string
+	}); ok {
+		return policy.RecheckToolInput(ctx, name, input)
+	}
+	return ""
+}
+
 // Stop 在 guard 原有语义之上补一层「空转回合」续跑:模型只输出了思考、既没给正文
 // 也没调工具时，harness 会把它当成自然结束并以空 summary 收场(query.go 的
 // ReasonCompleted + asst.Text())，一条本来还没做完的意图就这样断在半路。此时注入
@@ -619,17 +642,24 @@ func (h steerHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []s
 	return false, []string{emptyTurnNudge}, ""
 }
 
-// KillWork cancels the in-flight work running intentID (planner's kill_work tool).
-// The work's agent-core session honors ctx cancellation and aborts promptly.
-func (e *Engine) KillWork(intentID int64) error {
-	e.workMu.Lock()
-	run := e.work[intentID]
-	e.workMu.Unlock()
-	if run == nil {
-		return fmt.Errorf("意图 %d 当前没有运行中的 work（可能已结束或未被领取）", intentID)
+// CancelWorkersForAssets stops only workers anchored to revoked/deleted assets
+// in the current task. Shared assets in other tasks are intentionally ignored.
+func (e *Engine) CancelWorkersForAssets(taskID int64, assetIDs []int64) {
+	if e.m == nil || e.m.assets == nil || taskID <= 0 || len(assetIDs) == 0 {
+		return
 	}
-	run.cancel(agent.AbortKilledByPlanner)
-	return nil
+	ids, err := e.m.assets.RunningIntentIDsForAssets(taskID, assetIDs)
+	if err != nil {
+		return
+	}
+	for _, id := range ids {
+		e.workMu.Lock()
+		run := e.work[id]
+		e.workMu.Unlock()
+		if run != nil {
+			run.cancel(agent.AssetAuthorizationChangedCause(assetIDs))
+		}
+	}
 }
 
 // Broadcaster exposes the engine's live activity pub/sub (used by the SSE handler).
@@ -696,9 +726,18 @@ func (e *Engine) appendActivity(t *Task, r db.Activity) (int64, error) {
 	return 0, err
 }
 
-// SetReadiness wires the global "an LLM provider is configured" predicate (read by
-// Ready() / the llm_configured indicator). Called once at startup.
-func (e *Engine) SetReadiness(fn func() bool) { e.readiness = fn }
+// UseLLM installs (or replaces) the LLM planner + work agent at runtime.
+func (e *Engine) UseLLM(p *agent.Planner, w *agent.Worker) {
+	e.mu.Lock()
+	e.planner, e.worker = p, w
+	e.mu.Unlock()
+}
+
+func (e *Engine) snapshot() (*agent.Planner, *agent.Worker) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.planner, e.worker
+}
 
 // SetAgentResolver installs a per-task planner/worker resolver (wired by the server).
 // Called once at startup before any task loop runs, so no lock is needed on reads.
@@ -715,9 +754,9 @@ func (e *Engine) SetAuthoritativeAgentResolver(fn func(t *Task) (*agent.Planner,
 	e.resolveAuthoritative = true
 }
 
-// snapshotFor returns the planner/worker a task should run on, from the task-router
-// resolver. nil,nil means the task is deliberately unavailable (e.g. an exhausted
-// failover chain); there is no global-pair fallback.
+// snapshotFor returns the planner/worker a task should run on: the task's dedicated
+// pair when it pins a specific LLM profile (via the resolver), else the global active
+// pair. The resolver returning nil means "no override" (fall back to global).
 func (e *Engine) snapshotFor(t *Task) (*agent.Planner, *agent.Worker) {
 	if e.resolve != nil {
 		p, w := e.resolve(t)
@@ -725,13 +764,13 @@ func (e *Engine) snapshotFor(t *Task) (*agent.Planner, *agent.Worker) {
 			return p, w
 		}
 	}
-	return nil, nil
+	return e.snapshot()
 }
 
-// Ready reports whether a global LLM provider is configured (via the readiness
-// predicate wired at startup).
+// Ready reports whether an LLM provider is configured.
 func (e *Engine) Ready() bool {
-	return e.readiness != nil && e.readiness()
+	p, w := e.snapshot()
+	return p != nil && w != nil
 }
 
 // ReadyFor reports whether a specific task can resolve a planner/worker pair.
@@ -740,6 +779,14 @@ func (e *Engine) Ready() bool {
 func (e *Engine) ReadyFor(t *Task) bool {
 	p, w := e.snapshotFor(t)
 	return p != nil && w != nil
+}
+
+// Mode reports "llm" when ready, else "idle".
+func (e *Engine) Mode() string {
+	if e.Ready() {
+		return "llm"
+	}
+	return "idle"
 }
 
 // Run starts the planner loop + N worker loops for a task. The loops always run
@@ -754,6 +801,13 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 	}
 	if _, loaded := e.started.LoadOrStore(t.ID, true); loaded {
 		e.deleteMu.RUnlock()
+		// Resume shifted deadline_at by the paused interval in the admission
+		// UPDATE; drop the stale in-process copy so taskDeadline re-seeds from
+		// the task state instead of the pre-pause value.
+		e.deadline.Delete(t.ID)
+		if state := t.lifecycleSnapshot(); state.ExecutionMode == db.ExecutionManual && !state.Paused && !state.Queued && !e.IsPaused(t.ID) && !isTerminalStatus(state.Status) {
+			e.stampFirstRun(t) // A paused manual task may begin only on this resume.
+		}
 		t.Notify() // already running — just nudge a planning round
 		return
 	}
@@ -764,6 +818,9 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 	for i := 0; i < workers; i++ {
 		name := fmt.Sprintf("work#%d", i+1)
 		runTaskRoutine(rt, func(loopCtx context.Context) { e.workerLoop(loopCtx, t, name) })
+	}
+	if state := t.lifecycleSnapshot(); state.ExecutionMode == db.ExecutionManual && !state.Paused && !state.Queued && !e.IsPaused(t.ID) && !isTerminalStatus(state.Status) {
+		e.stampFirstRun(t) // No Planner/Worker call is needed to start manual-mode timeout.
 	}
 	e.startDeadlineCoordinator(ctx, t) // 任务级超时定时器(仅 timeout>0;去重)
 	// 仅在「完全没有活动意图(open+running)」时才 kick 首轮规划。带种子意图的任务:种子已
@@ -797,6 +854,155 @@ func resetPlannerTimer(timer *time.Timer, d time.Duration) {
 	timer.Reset(d)
 }
 
+func (e *Engine) runPlannerRound(ctx context.Context, t *Task, src string) {
+
+	if t.lifecycleSnapshot().ExecutionMode == db.ExecutionManual {
+		t.drainTriggers() // Persisted graph changes are read afresh when managed resumes.
+		return
+	}
+	// debounce: coalesce a burst of changes into one planning round
+	timer := time.NewTimer(e.debounce)
+	edgeSignal := src == "edge"
+drain:
+	for {
+		select {
+		case <-t.notify:
+			edgeSignal = true
+		case <-timer.C:
+			break drain
+		}
+	}
+	if edgeSignal {
+		src = "edge"
+	}
+	if t.lifecycleSnapshot().ExecutionMode == db.ExecutionManual {
+		t.drainTriggers()
+		return
+	}
+	planner, _ := e.snapshotFor(t)
+	if planner == nil {
+		return // idle until LLM configured
+	}
+	if e.IsPaused(t.ID) {
+		return // user-paused: don't plan
+	}
+	if e.IsDeleting(t.ID) {
+		return
+	}
+	// terminal task (goals all met → done, or failed): the run is over. A
+	// resume/nudge — e.g. auto-resume of the active task on restart — must NOT
+	// re-plan (it would burn an LLM round and re-confirm a settled result).
+	if isTerminalStatus(t.lifecycleSnapshot().Status) {
+		return
+	}
+	// 任务级超时收尾中:丢弃普通唤醒——worker 收尾写回、Resume 的 Notify 都不再
+	// 触发常规规划轮;终局那一轮由协调器(settleTask)直接驱动,不走这里。
+	if e.isSettling(t.ID) {
+		return
+	}
+	if waiting, err := t.Store.WaitingForAssetApproval(); err != nil {
+		log.Printf("[planner] task %s 审批等待状态查询失败: %v", t.ID, err)
+		return
+	} else if waiting {
+		return
+	}
+	// goalless（人工直投）分支：任务已无 open 目标时 planner 不跑——跑了会重判
+	// met→cancelExec 杀掉用户经主 agent 直投的意图。是否结束改由 frontier 决定：
+	// 还有 open/running 意图 → 保持 running、静默等待；意图已全部跑干 → 落 done。
+	// 整段纯 Go、不触发任何 LLM 调用，也不打规划轮 marker。
+	if open, err := t.Store.HasOpenGoal(); err == nil && !open {
+		t.drainTriggers() // 丢弃累积的 done/finding 触发，避免 goalless 长会话里无界增长
+		if active, err := t.Store.HasActiveIntent(); err == nil && !active {
+			// frontier 抽干且无在跑意图 → 收尾。用 Guarded 版做 CAS，避免踩到并发的
+			// pause/delete/超时收尾的状态转换。
+			if won, err := e.completeAutomatically(t); err != nil {
+				log.Printf("[goalless] task %s 收尾落 done 失败: %v", t.ID, err)
+			} else if won {
+				e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+					Summary: "目标已全部达成，直投意图已执行完毕，任务结束"})
+			}
+		}
+		return // goalless 分支永不进入 planner.Plan
+	}
+	if src == "heartbeat" {
+		planner.MaintainGraph(ctx, t.Store)
+	}
+	if src == "heartbeat" && !t.hasPendingTriggers() {
+		revision, revisionErr := t.Store.BlackboardRevision()
+		previous, hasPrevious := e.plannerRevision.Load(t.ID)
+		if revisionErr == nil && hasPrevious && previous.(string) == revision {
+			log.Printf("[planner] task %s 心跳跳过：黑板无变化", t.ID)
+			return
+		}
+	}
+	if !e.beginTaskOperation(t.ID) {
+		return
+	}
+	defer e.decInflight(t.ID)
+	e.stampFirstRun(t) // 首次真正规划 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
+	e.touch(t.ID)
+	emit := func(r db.Activity) { e.emitActivity(t, r) }
+	ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false) // cancellable by Pause; 带任务 deadline
+	if ectx.Err() != nil || e.IsDeleting(t.ID) {
+		return
+	}
+	ectx, releasePlanner, allowed := t.beginPlannerRound(ectx)
+	if !allowed {
+		return
+	}
+	defer releasePlanner()
+	if ectx.Err() != nil {
+		return
+	}
+	log.Printf("[planner] task %s 规划中…(%s 触发)", t.ID, src)
+	// round marker: each Plan() is one planner round; emit a boundary so the
+	// UI can separate rounds in the transcript (kind='round').
+	e.emitActivity(t, db.Activity{Worker: "planner", Kind: "round",
+		Summary: fmt.Sprintf("第 %d 轮规划", e.nextPlannerRound(t.ID))})
+	// what fired this round (worker done / finding; may be several — debounce
+	// coalesces a burst; empty for time/heartbeat wakes).
+	triggers := t.drainTriggers()
+	taskIDInt, _ := strconv.ParseInt(t.ID, 10, 64)
+	// Store only the revision observed before this call. Recording the post-call
+	// revision could swallow an async asset mutation that happened while the
+	// Planner was running even though that request never saw the mutation.
+	observedRevision, observedRevisionErr := t.Store.BlackboardRevision()
+	e.BeginLLMCall(t.ID)
+	planCtx := agent.WithRunInfo(ectx, agent.RunInfo{Trigger: src})
+	e.plannerActive.Store(t.ID, true)
+	met, reason, err := planner.Plan(planCtx, taskIDInt, e.m.assets, t.Guard, t.Store, t.Goal, triggers, emit)
+	e.plannerActive.Delete(t.ID)
+	t.wakeWorkers()
+	e.EndLLMCall(t.ID)
+	if ectx.Err() != nil {
+		return // Cancelled rounds cannot finish the task or update its planning revision.
+	}
+	if err == nil && observedRevisionErr == nil {
+		e.plannerRevision.Store(t.ID, observedRevision)
+	}
+	switch {
+	case err != nil && ectx.Err() == nil:
+		log.Printf("[planner] task %s 规划出错: %v", t.ID, err)
+	case met:
+		log.Printf("[planner] task %s 判定目标达成: %s", t.ID, reason)
+		// 所有目标达成 → 持久化任务状态为 done（前端 DTO 会优先展示该终态）。
+		won, finishErr := e.completeAutomatically(t)
+		if finishErr != nil {
+			log.Printf("[planner] task %s 标记完成失败: %v", t.ID, finishErr)
+		}
+		if !won {
+			return
+		}
+		// 任务已判完成 → 立刻取消在跑的 worker：它们手头的意图跑出来也没意义了。
+		// 下一轮 worker 循环撞终态门就不再领新意图;被取消的这批走下方"任务已完成"分支
+		// 归为 stopped(而非 blocked)。
+		e.cancelExec(t.ID, agent.AbortGoalMet)
+	default:
+		log.Printf("[planner] task %s 规划完成", t.ID)
+	}
+	e.touch(t.ID)
+}
+
 func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 	interval := plannerHeartbeatInterval(t)
 	// 心跳定时器在 loop 入口臂 = 从任务 start 计时:即使是跳过首轮 planner 的 seed 任务
@@ -806,107 +1012,16 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 	defer heartbeat.Stop()
 
 	// runRound 跑一轮规划(含 debounce 合并 + 各 guard)。src 仅用于日志区分触发来源。
-	runRound := func(src string) {
-		// debounce: coalesce a burst of changes into one planning round
-		timer := time.NewTimer(e.debounce)
-	drain:
-		for {
-			select {
-			case <-t.notify:
-			case <-timer.C:
-				break drain
-			}
-		}
-		planner, _ := e.snapshotFor(t)
-		if planner == nil {
-			return // idle until LLM configured
-		}
-		if e.IsPaused(t.ID) {
-			return // user-paused: don't plan
-		}
-		if e.IsDeleting(t.ID) {
-			return
-		}
-		// terminal task (goals all met → done, or failed): the run is over. A
-		// resume/nudge — e.g. auto-resume of the active task on restart — must NOT
-		// re-plan (it would burn an LLM round and re-confirm a settled result).
-		if isTerminalStatus(t.lifecycleSnapshot().Status) {
-			return
-		}
-		// 任务级超时收尾中:丢弃普通唤醒——worker 收尾写回、Resume 的 Notify 都不再
-		// 触发常规规划轮;终局那一轮由协调器(settleTask)直接驱动,不走这里。
-		if e.isSettling(t.ID) {
-			return
-		}
-		// goalless（人工直投）分支：任务已无 open 目标时 planner 不跑——跑了会重判
-		// met→cancelExec 杀掉用户经主 agent 直投的意图。是否结束改由 frontier 决定：
-		// 还有 open/running 意图 → 保持 running、静默等待；意图已全部跑干 → 落 done。
-		// 整段纯 Go、不触发任何 LLM 调用，也不打规划轮 marker。
-		if open, err := t.Store.HasOpenGoal(); err == nil && !open {
-			t.drainTriggers() // 丢弃累积的 done/finding 触发，避免 goalless 长会话里无界增长
-			if active, err := t.Store.HasActiveIntent(); err == nil && !active {
-				// frontier 抽干且无在跑意图 → 收尾。用 Guarded 版做 CAS，避免踩到并发的
-				// pause/delete/超时收尾的状态转换。
-				if won, err := e.m.SetTaskStatusGuarded(t.ID, "done"); err != nil {
-					log.Printf("[goalless] task %s 收尾落 done 失败: %v", t.ID, err)
-				} else if won {
-					e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
-						Summary: "目标已全部达成，直投意图已执行完毕，任务结束"})
-				}
-			}
-			return // goalless 分支永不进入 planner.Plan
-		}
-		if !e.beginTaskOperation(t.ID) {
-			return
-		}
-		defer e.decInflight(t.ID)
-		e.stampFirstRun(t) // 首次真正规划 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
-		e.touch(t.ID)
-		emit := func(r db.Activity) { e.emitActivity(t, r) }
-		ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false) // cancellable by Pause; 带任务 deadline
-		if ectx.Err() != nil || e.IsDeleting(t.ID) {
-			return
-		}
-		log.Printf("[planner] task %s 规划中…(%s 触发)", t.ID, src)
-		// round marker: each Plan() is one planner round; emit a boundary so the
-		// UI can separate rounds in the transcript (kind='round').
-		e.emitActivity(t, db.Activity{Worker: "planner", Kind: "round",
-			Summary: fmt.Sprintf("第 %d 轮规划", e.nextPlannerRound(t.ID))})
-		// what fired this round (worker done / finding; may be several — debounce
-		// coalesces a burst; empty for time/heartbeat wakes).
-		triggers := t.drainTriggers()
-		taskIDInt, _ := strconv.ParseInt(t.ID, 10, 64)
-		e.BeginLLMCall(t.ID)
-		met, reason, err := planner.Plan(ectx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)
-		e.EndLLMCall(t.ID)
-		switch {
-		case err != nil && ectx.Err() == nil:
-			log.Printf("[planner] task %s 规划出错: %v", t.ID, err)
-		case met:
-			log.Printf("[planner] task %s 判定目标达成: %s", t.ID, reason)
-			// 所有目标达成 → 持久化任务状态为 done（前端 DTO 会优先展示该终态）。
-			if err := e.m.SetTaskStatus(t.ID, "done"); err != nil {
-				log.Printf("[planner] task %s 标记完成落库失败: %v", t.ID, err)
-			}
-			// 任务已判完成 → 立刻取消在跑的 worker：它们手头的意图跑出来也没意义了。
-			// 下一轮 worker 循环撞终态门就不再领新意图;被取消的这批走下方"任务已完成"分支
-			// 归为 stopped(而非 blocked)。
-			e.cancelExec(t.ID, agent.AbortGoalMet)
-		default:
-			log.Printf("[planner] task %s 规划完成", t.ID)
-		}
-		e.touch(t.ID)
-	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.notify:
-			runRound("edge") // worker 结束 / finding / kill / resume / seed 首轮
+			e.runPlannerRound(ctx, t, "edge") // worker 结束 / finding / kill / resume / seed 首轮
 		case <-heartbeat.C:
 			// 周期兜底:死锁兜底 + 唤醒去监督飞行中的 worker(steer/kill) + 周期复查。
-			runRound("heartbeat")
+			e.runPlannerRound(ctx, t, "heartbeat")
 		}
 		// 每次唤醒(边沿或心跳)后重臂心跳:任意规划触发都重算这段静置计时。
 		resetPlannerTimer(heartbeat, interval)
@@ -914,47 +1029,65 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 }
 
 func (e *Engine) workerLoop(ctx context.Context, t *Task, name string) {
+	idle := false
+	wake := t.workerSignal()
 	for {
+		if idle {
+			timer := time.NewTimer(30 * time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-wake:
+			case <-timer.C:
+			}
+			timer.Stop()
+			wake = t.workerSignal()
+		}
+		if !idle {
+			wake = t.workerSignal()
+		}
+		idle = true
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
-		_, worker := e.snapshotFor(t)
-		if worker == nil {
-			if sleepCtx(ctx, 1500*time.Millisecond) {
-				return
-			}
-			continue
-		}
 		if e.IsPaused(t.ID) {
-			if sleepCtx(ctx, 1000*time.Millisecond) {
-				return
-			}
 			continue // user-paused: don't claim/execute intents
 		}
 		if e.IsDeleting(t.ID) {
 			return
 		}
 		if e.isSettling(t.ID) {
-			if sleepCtx(ctx, 1000*time.Millisecond) {
-				return
-			}
 			continue // 任务超时收尾中:不再领新意图(在跑的自行收尾,协调器等其 drain)
 		}
 		if isTerminalStatus(e.m.TaskStatus(t.ID)) {
-			if sleepCtx(ctx, 1000*time.Millisecond) {
-				return
-			}
 			continue // 任务已终态(done/failed/timeout):停止领取遗留意图,别在完成后空跑 frontier
+		}
+		// Provider resolution reads configuration. Do it only when work exists.
+		if active, err := t.Store.HasOpenIntent(); err != nil || !active {
+			select {
+			case <-wake:
+				idle = false
+			default:
+			}
+			continue
+		}
+		_, worker := e.snapshotFor(t)
+		if worker == nil {
+			continue
 		}
 		if !e.beginTaskOperation(t.ID) {
 			return
 		}
 		claimed := e.runWorkerStep(ctx, t, name, worker)
 		e.decInflight(t.ID)
-		if !claimed && sleepCtx(ctx, 800*time.Millisecond) {
-			return
+		idle = !claimed
+		select {
+		case <-wake:
+			idle = false
+		default:
 		}
 	}
 }
@@ -980,6 +1113,19 @@ func (e *Engine) runWorkerStep(ctx context.Context, t *Task, name string, worker
 // must already hold one task-operation admission for the whole sequence so a delete
 // cannot observe quiescence between the LLM return and the final DB writes.
 func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *agent.Worker, intent *db.Node, requestID, message string) bool {
+	// The detached human-message path also enters here, so repeat the admission
+	// check immediately before any task clock or LLM accounting is started.
+	if e.m.assets != nil {
+		taskID, _ := strconv.ParseInt(t.ID, 10, 64)
+		ids, idsErr := agent.IntentAssetIDs(t.Store, intent)
+		if idsErr != nil || e.m.assets.ValidateIntentAssets(taskID, intent, ids) != nil {
+			if err := transitionIntentState(t.Store, intent.ID, "running", "open"); err != nil {
+				log.Printf("[worker %s] task %s 意图 #%d 授权等待回退失败: %v", name, t.ID, intent.ID, err)
+			}
+			e.touch(t.ID)
+			return true
+		}
+	}
 	hasChatMessage := message != ""
 	e.stampFirstRun(t) // 首次真正执行 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
 	e.touch(t.ID)
@@ -1002,26 +1148,24 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		a.NodeID, a.Worker = &nid, name
 		emit(a)
 	}
-	label := fmt.Sprintf("%s · #%d", name, iid)
-	workCtx = intercept.WithTaskContext(workCtx, t.ID, label, taskEmit)
-	// nudges 有意建在 model_error 重跑循环之外:空转续跑的上限是「这条意图」的总量，
-	// 重跑一轮不该把额度清零重来。
-	hooks := steerHooks{
-		inner:  t.Guard.Hooks(),
-		drain:  func() (string, bool) { return e.drainSteer(iid) },
-		nudges: &atomic.Int64{},
-		limit:  e.emptyTurnNudgeLimit(),
-		label:  label,
-	}
+	workCtx = intercept.WithTaskContext(workCtx, t.ID, fmt.Sprintf("%s · #%d", name, iid), taskEmit)
 	wTaskID, _ := strconv.ParseInt(t.ID, 10, 64)
+	baseHooks := guard.AssetPolicyHooksWithGuard(t.Guard, e.m.assets, wTaskID)
+	hooks := steerHooks{inner: baseHooks, drain: func() (string, bool) { return e.drainSteer(iid) },
+		nudges: &atomic.Int64{}, limit: e.emptyTurnNudgeLimit(), label: fmt.Sprintf("%s · #%d", name, iid)}
 	e.BeginLLMCall(t.ID)
 	var reason harness.TerminalReason
 	var wrote agent.WriteCounts
 	var err error
+	initialTrigger := "claim"
 	if hasChatMessage {
-		reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message)
+		initialTrigger = "human_message"
+	}
+	initialCtx := agent.WithRunInfo(workCtx, agent.RunInfo{Trigger: initialTrigger})
+	if hasChatMessage {
+		reason, wrote, err = worker.ExecuteWithMessage(initialCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message)
 	} else {
-		reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding)
+		reason, wrote, err = worker.Execute(initialCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding)
 	}
 	e.EndLLMCall(t.ID)
 	// model_error 收场 → 额外重跑几次（退避后再试）。仅在意图仍属本 work、任务
@@ -1037,10 +1181,11 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 			break // 退避期间被取消（终止/暂停）→ 交给下方分支处理
 		}
 		e.BeginLLMCall(t.ID)
+		retryCtx := agent.WithRunInfo(workCtx, agent.RunInfo{Trigger: initialTrigger, RetryOrdinal: attempt})
 		if hasChatMessage {
-			reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message)
+			reason, wrote, err = worker.ExecuteWithMessage(retryCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message)
 		} else {
-			reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding)
+			reason, wrote, err = worker.Execute(retryCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding)
 		}
 		e.EndLLMCall(t.ID)
 	}
@@ -1065,6 +1210,14 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	}
 	var controlErr error
 	defer func() { completeWork(controlErr) }()
+	if action == "kill" {
+		controlErr = transitionIntentState(t.Store, intent.ID, "running", "stopped")
+		if controlErr != nil {
+			log.Printf("[worker %s] task %s 意图 #%d 规划者终止状态落库失败: %v", name, t.ID, intent.ID, controlErr)
+		}
+		e.touch(t.ID)
+		return true
+	}
 	if action == "pause" {
 		controlErr = transitionIntentState(t.Store, intent.ID, "running", "paused")
 		if controlErr != nil {
@@ -1076,15 +1229,15 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		return true
 	}
 	if action == "cancel" {
-		// Park the stopped run in paused before handing cleanup to the API. If the
+		// Park the stopped run in paused before recording user cancellation. If the
 		// request disconnects after cancellation, the intent remains recoverable and
-		// a later cancel can finish cleanup instead of leaving a phantom running row.
+		// a later cancel can finish recording the reason and execution lock.
 		controlErr = transitionIntentState(t.Store, intent.ID, "running", "paused")
 		if controlErr != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 取消栅栏落库失败: %v", name, t.ID, intent.ID, controlErr)
 			return true
 		}
-		log.Printf("[worker %s] task %s 意图 #%d 已停止，等待取消清理", name, t.ID, intent.ID)
+		log.Printf("[worker %s] task %s 意图 #%d 已停止，等待登记用户取消", name, t.ID, intent.ID)
 		e.touch(t.ID)
 		return true
 	}
@@ -1117,18 +1270,42 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		e.touch(t.ID)
 		return true
 	}
-	// killed by the planner: mark stopped (don't write back results, don't auto-reclaim).
+	// A per-work cancellation (planner kill or an authorization change) stops the
+	// intent without writing back or auto-reclaiming it. Asset authorization
+	// changes are also persisted as an explicit system activity so the UI/audit
+	// trail explains why the otherwise healthy Worker disappeared immediately.
 	if killed {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
-			log.Printf("[worker %s] task %s 意图 #%d planner 停止落库失败: %v", name, t.ID, intent.ID, err)
+			log.Printf("[worker %s] task %s 意图 #%d 停止落库失败: %v", name, t.ID, intent.ID, err)
 		}
-		log.Printf("[worker %s] task %s 意图 #%d 被终止(stopped)", name, t.ID, intent.ID)
+		code, short, detail, hasCause := agent.AbortReason(workCtx)
+		if hasCause && code == "asset_authorization_changed" {
+			taskEmit(db.Activity{
+				Kind:    "text",
+				IsError: true,
+				Summary: short,
+				Detail:  detail,
+			})
+		}
+		if !hasCause {
+			short = "未能取得取消原因"
+		}
+		log.Printf("[worker %s] task %s 意图 #%d 被终止(stopped): %s", name, t.ID, intent.ID, short)
 		e.touch(t.ID)
-		t.Notify()
 		return true
 	}
 	if err != nil {
 		log.Printf("[worker %s] intent %d: %v", name, intent.ID, err)
+	}
+	if errors.Is(err, agent.ErrWorkerAssetAuthorization) {
+		if stateErr := transitionIntentState(t.Store, intent.ID, "running", "open"); stateErr != nil {
+			log.Printf("[worker %s] task %s 意图 #%d 授权等待回退失败: %v", name, t.ID, intent.ID, stateErr)
+		}
+		touch := db.Activity{Kind: "result", IsError: true, Summary: "意图等待资产审批", Detail: err.Error()}
+		taskEmit(touch)
+		e.touch(t.ID)
+		t.Notify()
+		return true
 	}
 	// terminal分流：撞步数上限 ≠ 完成。max_turns→exhausted（规划者据此知道这个方向
 	// 试过但没真正做完、需换角度，而非当成已覆盖永久跳过）；出错→blocked；正常→done。
@@ -1169,6 +1346,12 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 // task pause/delete/shutdown still stops it). Returns an error if the run could not
 // be started; the intent is left untouched in that case.
 func (e *Engine) runDetachedIntent(ctx context.Context, t *Task, intentID int64, requestID, message, agentMessage string) error {
+	t.workerControlMu.Lock()
+	defer t.workerControlMu.Unlock()
+	lifecycle := t.lifecycleSnapshot()
+	if e.IsPaused(t.ID) || lifecycle.Paused || lifecycle.Queued || isTerminalStatus(lifecycle.Status) || e.isSettling(t.ID) {
+		return fmt.Errorf("%w: 当前任务状态不允许恢复 Worker", db.ErrIntentStateConflict)
+	}
 	if !e.beginTaskOperation(t.ID) {
 		return fmt.Errorf("task is being deleted")
 	}
@@ -1189,7 +1372,20 @@ func (e *Engine) runDetachedIntent(ctx context.Context, t *Task, intentID int64,
 	if node == nil || node.Kind != db.KindIntent {
 		return fmt.Errorf("intent not found")
 	}
-	changed, err := t.Store.CompareAndSetIntentState(intentID, "paused", "running")
+	if e.m.assets != nil {
+		taskID, _ := strconv.ParseInt(t.ID, 10, 64)
+		ids, accessErr := agent.IntentAssetIDs(t.Store, node)
+		if accessErr == nil {
+			accessErr = e.m.assets.ValidateIntentAssets(taskID, node, ids)
+		}
+		if accessErr == nil {
+			accessErr = e.m.assets.ValidateIntentHosts(taskID, node, guard.CollectTargetHosts(node.Payload))
+		}
+		if accessErr != nil {
+			return accessErr
+		}
+	}
+	changed, err := t.Store.ClaimPausedIntentByUser(intentID)
 	if err != nil {
 		return err
 	}
@@ -1235,11 +1431,35 @@ func sleepCtx(ctx context.Context, d time.Duration) (done bool) {
 }
 
 func (e *Engine) claimNext(t *Task, name string) *db.Node {
-	fr, _ := t.Store.Frontier(20)
-	for _, in := range fr {
-		if ok, _ := t.Store.ClaimIntent(in.ID, name); ok {
-			return in
-		}
+	t.workerControlMu.Lock()
+	defer t.workerControlMu.Unlock()
+	if e.IsPaused(t.ID) || isTerminalStatus(t.lifecycleSnapshot().Status) {
+		return nil
 	}
-	return nil
+	node, err := t.Store.ClaimNextWorker(name, func(in *db.Node) bool {
+		if e.m.assets != nil {
+			taskID, _ := strconv.ParseInt(t.ID, 10, 64)
+			ids, err := agent.IntentAssetIDs(t.Store, in)
+			return err == nil && e.m.assets.ValidateIntentAssets(taskID, in, ids) == nil && e.m.assets.ValidateIntentHosts(taskID, in, guard.CollectTargetHosts(in.Payload)) == nil
+		}
+		return true
+	})
+	if err != nil {
+		log.Printf("[worker queue] task %s claim: %v", t.ID, err)
+	}
+	return node
+}
+
+// Mode transitions and automatic completion use the same admission mutex.
+func (e *Engine) completeAutomatically(t *Task) (bool, error) {
+	t.workerControlMu.Lock()
+	defer t.workerControlMu.Unlock()
+	mode, err := t.Store.ExecutionMode()
+	if err != nil {
+		return false, err
+	}
+	if mode == db.ExecutionManual {
+		return false, nil
+	}
+	return e.m.SetTaskStatusGuarded(t.ID, "done")
 }

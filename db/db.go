@@ -1,4 +1,4 @@
-// Package db is the PostgreSQL data source for ARTEX (取代旧 graph 单文件 SQLite)。
+// Package db is the PostgreSQL data source for SERIES (取代旧 graph 单文件 SQLite)。
 // 它打开连接、应用 schema、并 seed 内置 agent 与变量目录。
 package db
 
@@ -12,20 +12,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/config"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx database/sql driver ("pgx")
+	"github.com/neouks/series/config"
 )
 
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaMigrationLockKey int64 = 7337741001
+//go:embed asset_templates.sql
+var assetTemplateSQL string
 
-// maxOpenConns 是连接池上限，见 Open 里的说明。取值远低于 PostgreSQL 默认的
-// max_connections=100，同时远高于应用自身的嵌套取连接深度（启动期的 schema
-// advisory lock 会在持有一条连接的同时让 seedBuiltins 另取连接），不会自锁。
-const maxOpenConns = 32
+//go:embed graph_maintenance.sql
+var graphMaintenanceSQL string
+
+const schemaMigrationLockKey int64 = 7337741001
 
 var schemaDeadlockRetryDelays = [...]time.Duration{
 	100 * time.Millisecond,
@@ -45,7 +46,7 @@ func isPostgresDeadlock(err error) bool {
 
 func applySchemaWithRetry(ctx context.Context, execer schemaExecer, sleep func(time.Duration)) error {
 	for attempt := 0; ; attempt++ {
-		if _, err := execer.ExecContext(ctx, schemaSQL); err != nil {
+		if _, err := execer.ExecContext(ctx, schemaSQL+"\n"+assetTemplateSQL+"\n"+graphMaintenanceSQL); err != nil {
 			if !isPostgresDeadlock(err) || attempt >= len(schemaDeadlockRetryDelays) {
 				return err
 			}
@@ -87,7 +88,7 @@ func coordinateWithSchemaMigration(tx *sql.Tx) error {
 }
 
 // DSN resolves the PostgreSQL connection string and reports where it came from.
-// Precedence: env ARTEX_PG_DSN > config file (config.json). There is no
+// Precedence: env SERIES_PG_DSN > config file (config.json). There is no
 // built-in default — it errors if neither source is configured.
 func DSN() (dsn, source string, err error) {
 	return config.PostgresDSN()
@@ -138,19 +139,23 @@ func Open(dsn string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	// database/sql 默认不限制连接数：池里没有空闲连接时会无条件新建，一路顶到
-	// PostgreSQL 的 max_connections（默认 100）才被拒，于是高峰期的查询拿到的是
-	// `FATAL: sorry, too many clients already` 这种**错误**。封顶之后超额查询改为
-	// 排队等待空闲连接——同样的负载下变成变慢而不是报错，调用方不必再去区分
-	// "读不到"和"没有"。maxOpenConns 要留出余量给 psql / reset-password.sh 以及
-	// 可能并存的其他实例；若 max_connections 调低过，这里也要跟着往下调。
-	sqlDB.SetMaxOpenConns(maxOpenConns)
-	sqlDB.SetMaxIdleConns(maxOpenConns)
-	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	// Bound runtime pressure and retain enough idle connections to avoid the
+	// default two-connection pool repeatedly reconnecting during request bursts.
+	sqlDB.SetMaxOpenConns(20)
+	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
 	if err := sqlDB.Ping(); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("ping postgres (%s): %w", config.Redact(dsn), err)
+	}
+	// An existing settings table identifies an upgraded installation. Its absent
+	// retention setting must stay unlimited; only a genuinely new database gets
+	// the 30-day default. Detect this before applying the schema.
+	var freshInstall bool
+	if err := sqlDB.QueryRow(`SELECT to_regclass('settings') IS NULL`).Scan(&freshInstall); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("detect existing settings: %w", err)
 	}
 	d := &DB{sqlDB}
 	// pgx runs multi-statement Exec via the simple protocol when there are no args.
@@ -160,8 +165,21 @@ func Open(dsn string) (*DB, error) {
 		if err := applySchemaWithRetry(context.Background(), conn, time.Sleep); err != nil {
 			return fmt.Errorf("apply schema: %w", err)
 		}
+		retentionDefault := "0"
+		if freshInstall {
+			retentionDefault = "30"
+		}
+		if _, err := conn.ExecContext(context.Background(), `INSERT INTO settings(key,value) VALUES ('traffic_retention_days',$1) ON CONFLICT (key) DO NOTHING`, retentionDefault); err != nil {
+			return fmt.Errorf("initialize traffic retention: %w", err)
+		}
+		if err := ensurePerformanceIndexes(context.Background(), conn); err != nil {
+			return err
+		}
 		if err := d.seedBuiltins(); err != nil {
 			return fmt.Errorf("seed builtins: %w", err)
+		}
+		if err := d.backfillToolUsage(); err != nil {
+			return fmt.Errorf("backfill tool usage: %w", err)
 		}
 		return nil
 	})
@@ -252,21 +270,47 @@ ON CONFLICT (agent_id, var_name) DO UPDATE
 		}
 		_ = d.SetSetting("interactive_shell_default_v1", "true")
 	}
-	// Seed the built-in browser (Playwright) MCP once — DISABLED by default (用户
-	// 需要时自行启用), no proxy by default. The traffic-capture toggle injects/strips
-	// the recording proxy + CA at runtime (server.Manager.syncBrowserMCPProxy).
-	// Insert only if absent so we never clobber user edits (args/env/enabled/
-	// visibility) on restart.
+	// The historical Playwright row was named "browser". Rename it in place only
+	// when the canonical name is free, preserving its ID, cache, visibility and
+	// user configuration. If both names exist, leave both untouched.
 	if _, err := d.Exec(`
-INSERT INTO mcp_servers(name, transport, command, args, env, enabled)
-VALUES ('browser', 'stdio', 'npx', $1, '{}', false)
-ON CONFLICT (name) DO NOTHING`,
-		`["@playwright/mcp","--headless"]`); err != nil {
-		return fmt.Errorf("seed browser mcp: %w", err)
+		UPDATE mcp_servers
+		SET name='playwright'
+		WHERE name='browser'
+		  AND NOT EXISTS (SELECT 1 FROM mcp_servers WHERE name='playwright')`); err != nil {
+		return fmt.Errorf("migrate browser mcp: %w", err)
 	}
-	// NOTE: the placeholder ScopeSentry data-source MCP (empty URL + empty X-API-Key,
-	// disabled) is seeded directly in schema.sql §F so a raw `psql < schema.sql` init
-	// also gets it. schema.sql is Exec'd on every startup, so it stays idempotent.
+	// Built-in MCPs are configuration presets only: disabled and not granted to
+	// any agent. ON CONFLICT ensures restarts never overwrite user changes.
+	if _, err := d.Exec(`
+		INSERT INTO mcp_servers(name, transport, command, args, env, enabled)
+		VALUES
+		  ('playwright', 'stdio', 'npx', '["@playwright/mcp","--headless"]', '{}', false),
+		  ('web_search', 'stdio', 'npx', '["-y","@zhafron/mcp-web-search"]', '{}', false),
+		  ('chrome-devtools', 'stdio', 'npx', '["-y","chrome-devtools-mcp","--slim","--headless"]', '{}', false)
+		ON CONFLICT (name) DO NOTHING`); err != nil {
+		return fmt.Errorf("seed builtin mcps: %w", err)
+	}
+	// Remove the obsolete, untouched placeholder once. A user-configured server
+	// remains available as an ordinary MCP, even though the sync page is gone.
+	if _, done, err := d.GetSetting("scopesentry_placeholder_cleanup_v1"); err != nil {
+		return fmt.Errorf("read scopesentry cleanup marker: %w", err)
+	} else if !done {
+		if _, err := d.Exec(`DELETE FROM mcp_servers m WHERE m.name='ScopeSentry'
+		  AND m.transport='http' AND m.url IS NULL AND m.command IS NULL
+		  AND m.args='[]'::jsonb AND m.env='{"X-API-Key":""}'::jsonb
+		  AND NOT m.enabled AND NOT m.insecure
+		  AND NOT EXISTS (SELECT 1 FROM agent_visibility v WHERE v.resource_kind='mcp' AND v.resource_id=m.id)
+		  AND NOT EXISTS (SELECT 1 FROM mcp_tools_cache c WHERE c.server_id=m.id)`); err != nil {
+			return fmt.Errorf("cleanup scopesentry placeholder: %w", err)
+		}
+		if _, err := d.Exec(`DELETE FROM agent_skill_visibility WHERE skill_name='scopesentry'`); err != nil {
+			return fmt.Errorf("cleanup scopesentry skill visibility: %w", err)
+		}
+		if err := d.SetSetting("scopesentry_placeholder_cleanup_v1", "done"); err != nil {
+			return fmt.Errorf("mark scopesentry cleanup: %w", err)
+		}
+	}
 	if err := d.seedBuiltinSkillVisibility(); err != nil {
 		return fmt.Errorf("seed skill visibility: %w", err)
 	}
@@ -279,48 +323,14 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV3(); err != nil {
 		return fmt.Errorf("seed intercept rules v3: %w", err)
 	}
-	if err := d.seedDefaultAssetInterceptRules(); err != nil {
-		return fmt.Errorf("seed asset intercept rules: %w", err)
-	}
 	return nil
-}
-
-// seedDefaultAssetInterceptRules inserts the built-in asset blocklist (fuzzy
-// domain matches for government / education sites) once on first startup. Gated
-// by a settings flag so a user's later disable/delete is never resurrected on
-// restart — same policy as the intercept-rule seed.
-func (d *DB) seedDefaultAssetInterceptRules() error {
-	if v, _, _ := d.GetSetting("asset_intercept_default_rules_v1"); v == "done" {
-		return nil
-	}
-	rules := []struct {
-		kind    string
-		pattern string
-		note    string
-	}{
-		{"fuzzy_domain", ".gov", "[内置] 政府网站 (.gov)"},
-		{"fuzzy_domain", ".gov.cn", "[内置] 政府网站 (.gov.cn)"},
-		{"fuzzy_domain", ".edu", "[内置] 教育网站 (.edu)"},
-		{"fuzzy_domain", ".edu.cn", "[内置] 教育网站 (.edu.cn)"},
-	}
-	for _, r := range rules {
-		if _, err := d.Exec(`
-INSERT INTO asset_intercept_rules(enabled, kind, pattern, note, builtin)
-VALUES (true, $1, $2, $3, true)
-ON CONFLICT DO NOTHING`, r.kind, r.pattern, r.note); err != nil {
-			return fmt.Errorf("asset rule %q: %w", r.pattern, err)
-		}
-	}
-	return d.SetSetting("asset_intercept_default_rules_v1", "done")
 }
 
 // builtinSkillVisibility maps a shipped skill's directory name → the built-in
 // agent keys that should see it by default. The skill FILES themselves live on the
 // filesystem (SkillDir, loaded by norma at runtime); DB only carries this visibility
-// binding. Skills omitted here (e.g. playwright-cli, scopesentry) ship invisible by
-// default — the user turns them on per-agent when needed. scopesentry additionally
-// declares `mcps: ScopeSentry`, which only takes effect once it's made visible and
-// that MCP is enabled/configured.
+// binding. Skills omitted here (e.g. playwright-cli) ship invisible by default —
+// the user turns them on per-agent when needed.
 var builtinSkillVisibility = map[string][]string{
 	"api-recon": {"auto", "pentest", "worker"},
 }
