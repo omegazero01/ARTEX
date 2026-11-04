@@ -35,7 +35,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type {
-  AllianceSystem,
   Asset,
   AssetApprovalTemplate,
   ChatAttachment,
@@ -70,8 +69,6 @@ function appendUploads(desc: string, atts: ChatAttachment[]): string {
 
 const MAX_SOURCE_TASKS = 8;
 const MAX_TASK_ASSETS = 100;
-// 与后端 maxAllianceTaskSystems 一致（联盟系统条目一次最多选 20 条）
-const MAX_ALLIANCE_SYSTEMS = 20;
 const TASK_ASSET_TYPES = ["root_domain", "ip", "subdomain", "app", "service", "endpoint"] as const;
 function SourceTaskPicker({
   tasks,
@@ -452,123 +449,6 @@ function TaskAssetPicker({
   );
 }
 
-// AlliancePicker selects 联盟系统台账 entries (fork-only: feat/alliance-system).
-// Each selected entry contributes its endpoints as standard assets and one
-// briefing line inside the task description; the preview below the picker shows
-// the exact text that will be appended.
-function AlliancePicker({
-  value,
-  onValueChange,
-  portalContainer,
-}: {
-  value: number[];
-  onValueChange: (value: number[]) => void;
-  portalContainer?: React.RefObject<HTMLElement | null>;
-}) {
-  const [systems, setSystems] = React.useState<AllianceSystem[]>([]);
-  const [loading, setLoading] = React.useState(false);
-  const [brief, setBrief] = React.useState("");
-  React.useEffect(() => {
-    let active = true;
-    setLoading(true);
-    api
-      .allianceSystems()
-      .then((items) => {
-        if (active) setSystems(items.filter((s) => s.status !== "archived"));
-      })
-      .catch(() => {
-        if (active) setSystems([]);
-      })
-      .finally(() => active && setLoading(false));
-    return () => {
-      active = false;
-    };
-  }, []);
-  React.useEffect(() => {
-    if (value.length === 0) {
-      setBrief("");
-      return;
-    }
-    let active = true;
-    api
-      .allianceBrief(value)
-      .then((r) => {
-        if (active) setBrief(r.brief ?? "");
-      })
-      .catch(() => {
-        if (active) setBrief("");
-      });
-    return () => {
-      active = false;
-    };
-  }, [value]);
-  const byID = React.useMemo(() => new Map(systems.map((s) => [String(s.id), s])), [systems]);
-  const ids = React.useMemo(() => systems.map((s) => String(s.id)), [systems]);
-  const selectedIDs = React.useMemo(() => value.map(String), [value]);
-  const atLimit = value.length >= MAX_ALLIANCE_SYSTEMS;
-  return (
-    <div className="grid gap-2">
-      <Combobox
-        items={ids}
-        multiple
-        value={selectedIDs}
-        itemToStringValue={(id) => {
-          const sys = byID.get(id);
-          return sys ? `${sys.name} ${sys.url ?? ""}` : id;
-        }}
-        onValueChange={(next) => onValueChange(next.slice(0, MAX_ALLIANCE_SYSTEMS).map(Number))}
-      >
-        <ComboboxChips>
-          <ComboboxValue>
-            {selectedIDs.map((id) => (
-              <ComboboxChip key={id}>{byID.get(id)?.name ?? `系统 #${id}`}</ComboboxChip>
-            ))}
-          </ComboboxValue>
-          <ComboboxChipsInput
-            id="task-alliance"
-            placeholder={
-              loading
-                ? "加载联盟画像中…"
-                : atLimit
-                  ? `最多选择 ${MAX_ALLIANCE_SYSTEMS} 条`
-                  : "搜索画像名称 / 业务 / 框架"
-            }
-            disabled={loading}
-          />
-        </ComboboxChips>
-        <ComboboxContent portalContainer={portalContainer}>
-          <ComboboxEmpty>{loading ? "加载联盟画像中…" : "没有匹配的联盟画像"}</ComboboxEmpty>
-          <ComboboxList>
-            {(id: string) => {
-              const sys = byID.get(id);
-              if (!sys) return null;
-              return (
-                <ComboboxItem key={id} value={id} disabled={atLimit && !selectedIDs.includes(id)}>
-                  <div className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate">{sys.name}</span>
-                    {sys.platform ? (
-                      <Badge variant="outline" className="shrink-0">
-                        {sys.platform}
-                      </Badge>
-                    ) : null}
-                    <code className="text-muted-foreground max-w-40 shrink-0 truncate text-xs">{sys.url}</code>
-                  </div>
-                </ComboboxItem>
-              );
-            }}
-          </ComboboxList>
-        </ComboboxContent>
-      </Combobox>
-      {brief ? (
-        <pre className="max-h-40 overflow-auto rounded-md border bg-muted/40 p-2 text-xs whitespace-pre-wrap">
-          {brief}
-          {"\n\n（以上文本会追加到任务描述，并随任务进入测试流程）"}
-        </pre>
-      ) : null}
-    </div>
-  );
-}
-
 export function TaskCreationForm() {
   const router = useRouter();
   const [details, setDetails] = React.useState(false);
@@ -593,7 +473,6 @@ export function TaskCreationForm() {
   const [sourceTaskIDs, setSourceTaskIDs] = React.useState<string[]>([]);
   const [companyIDs, setCompanyIDs] = React.useState<number[]>([]);
   const [assetIDs, setAssetIDs] = React.useState<number[]>([]);
-  const [allianceSystemIDs, setAllianceSystemIDs] = React.useState<number[]>([]);
   const [llmProfileIDs, setLLMProfileIDs] = React.useState<string[]>([]);
   const [creating, setCreating] = React.useState(false);
   const [timeoutMin, setTimeoutMin] = React.useState(""); // 任务级超时(分钟);空/0 = 不限时
@@ -678,7 +557,6 @@ export function TaskCreationForm() {
         sourceTaskIds: sourceTaskIDs,
         companyIds: companyIDs,
         assetIds: assetIDs,
-        allianceSystemIds: allianceSystemIDs,
         assetApprovalTemplate,
         timeoutSeconds: timeoutSec,
         seedFirstIntent,
@@ -841,20 +719,6 @@ export function TaskCreationForm() {
                   <FieldDescription>
                     {assetIDs.length > 0 ? `已选择 ${assetIDs.length} 项资产。` : "尚未选择独立资产。"}{" "}
                     从全局资产库选择的资产会与企业快照一起加入任务范围，最多 {MAX_TASK_ASSETS} 项。
-                  </FieldDescription>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="task-alliance">联盟画像（可选）</FieldLabel>
-                  <AlliancePicker
-                    value={allianceSystemIDs}
-                    onValueChange={setAllianceSystemIDs}
-                    portalContainer={sheetContentRef}
-                  />
-                  <FieldDescription>
-                    {allianceSystemIDs.length > 0
-                      ? `已选择 ${allianceSystemIDs.length} 个联盟画像。`
-                      : "从联盟画像选择系统时，其入口会自动登记为本任务资产（自动批准），并在任务启动时尝试阅读画像（失败不阻断任务）。"}{" "}
-                    最多 {MAX_ALLIANCE_SYSTEMS} 个。
                   </FieldDescription>
                 </Field>
               </CollapsibleContent>

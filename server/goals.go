@@ -45,7 +45,6 @@ func (s *Server) startTaskEngine(t *Task) {
 		return
 	}
 	// 联盟画像软提示阅读：仅在任务绑定快照时执行；失败只记录，不暂停任务。
-	s.ensureAllianceProfileRead(ctx, t)
 	if ctx.Err() != nil || s.engine.IsDeleting(t.ID) {
 		return
 	}

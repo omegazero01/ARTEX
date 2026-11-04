@@ -103,7 +103,6 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 	// would inject the description twice. System prompt stays pure static instructions.
 	sys := renderSystem("goals", goalsDefaultTmpl, GoalsVars{DataDir: dataDir, Now: nowStr()})
 	if ts != nil {
-		sys += ts.AllianceProfileContext(taskID)
 	}
 	// set_constraints 始终可用(不依赖 asset store):正文已含「先抽操作约束再拆目标」这步
 	// (可在 agent 编辑页改措辞),这里只需接上工具。

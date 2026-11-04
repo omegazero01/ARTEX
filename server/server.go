@@ -231,10 +231,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		domainReg := buildDomainReg(m.Assets())
 		wireTools(m.pg, domainReg, m.dir) // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
 		seedPrompts(m.pg)                 // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
-		if err := m.pg.Alliance().BackfillAllianceProfiles(); err != nil {
-			log.Printf("[alliance-profile] 旧台账画像回填失败: %v", err)
-		}
-		s.seedOrchestrationTools() // P2 跨任务编排工具 seed 进 tools 表(可按 agent 绑定)
+		s.seedOrchestrationTools()        // P2 跨任务编排工具 seed 进 tools 表(可按 agent 绑定)
 		s.wireContextReads()
 		if err := migrateContextCatalog(m.pg); err != nil {
 			log.Printf("[tools] 上下文工具迁移失败，禁止 Agent 装配: %v", err)
@@ -272,7 +269,6 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	}
 	s.restoreTaskRuntimes()
 	go s.workerFeedbackLoop()
-	go s.allianceProfileFeedbackLoop()
 	go s.reconcileConcurrency()
 	s.startTaskArchiveWorker()
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
@@ -915,28 +911,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/assets/counts", s.assetCounts)
 	mux.HandleFunc("POST /api/assets", s.insertAssets)
 	mux.HandleFunc("DELETE /api/assets", s.deleteAssets)
-	// 联盟系统台账（fork-only: feat/alliance-system，城商行联盟定制）
-	mux.HandleFunc("GET /api/alliance/systems", s.listAllianceSystems)
-	mux.HandleFunc("POST /api/alliance/systems", s.createAllianceSystem)
-	mux.HandleFunc("GET /api/alliance/systems/{id}", s.getAllianceSystem)
-	mux.HandleFunc("PATCH /api/alliance/systems/{id}", s.updateAllianceSystem)
-	mux.HandleFunc("DELETE /api/alliance/systems/{id}", s.deleteAllianceSystem)
-	mux.HandleFunc("POST /api/alliance/systems/{id}/endpoints", s.addAllianceEndpoint)
-	mux.HandleFunc("DELETE /api/alliance/systems/{id}/endpoints/{endpointID}", s.deleteAllianceEndpoint)
-	mux.HandleFunc("GET /api/alliance/stats", s.allianceStats)
-	mux.HandleFunc("GET /api/alliance/brief", s.allianceBriefPreview)
-	// 联盟画像（feat/alliance-profile）：文档/版本/建议/任务快照与软阅读。
-	mux.HandleFunc("GET /api/alliance/template", s.allianceProfileTemplate)
-	mux.HandleFunc("GET /api/alliance/systems/{id}/profile", s.getAllianceProfile)
-	mux.HandleFunc("PUT /api/alliance/systems/{id}/profile", s.putAllianceProfile)
-	mux.HandleFunc("GET /api/alliance/systems/{id}/profile/history", s.getAllianceProfileHistory)
-	mux.HandleFunc("GET /api/alliance/suggestions", s.listAllianceSuggestions)
-	mux.HandleFunc("POST /api/alliance/suggestions/{id}/review", s.reviewAllianceSuggestion)
-	mux.HandleFunc("GET /api/alliance/suggestions/{id}/evidence", s.allianceSuggestionEvidence)
-	mux.HandleFunc("GET /api/tasks/{id}/alliance-profile", s.getAllianceTaskProfile)
-	mux.HandleFunc("POST /api/tasks/{id}/alliance-profile/read", s.postAllianceTaskProfileRead)
-	mux.HandleFunc("GET /api/tasks/{id}/alliance-feedback", s.getAllianceTaskFeedback)
-	mux.HandleFunc("POST /api/tasks/{id}/alliance-feedback/{run}/retry", s.postAllianceTaskFeedbackRetry)
 
 	// company system
 	mux.HandleFunc("GET /api/companies", s.listCompanies)
@@ -1649,16 +1623,15 @@ type createTaskReq struct {
 	CategoryID            *int64   `json:"category_id,omitempty"`
 	Description           string   `json:"description"`
 	Goal                  string   `json:"goal"`
-	LLMProfileID          *int64   `json:"llm_profile_id,omitempty"`      // 指定运行本任务的 LLM 配置;省略/null=用激活配置
-	LLMProfileIDs         []int64  `json:"llm_profile_ids,omitempty"`     // 有序任务级配置链;第一项初始生效
-	SourceTaskIDs         []string `json:"source_task_ids,omitempty"`     // 仅直接、只读继承的来源任务
-	CompanyIDs            []int64  `json:"company_ids,omitempty"`         // 关联企业范围并快照关联当前企业资产;不复制资产或强制生成意图
-	AssetIDs              []int64  `json:"asset_ids,omitempty"`           // 创建时独立选择的全局资产
-	AllianceSystemIDs     []int64  `json:"alliance_system_ids,omitempty"` // 联盟系统台账条目（fork-only）：入口自动登记为标准资产，描述并入任务描述
-	TimeoutSeconds        int      `json:"timeout_seconds"`               // 任务级超时(秒);0/省略=不限时
-	PlanHeartbeatSeconds  int      `json:"plan_heartbeat_seconds"`        // planner 心跳触发间隔(秒);0/省略=默认600(10min);下限=默认=600,低于自动抬到600
-	SeedFirstIntent       *bool    `json:"seed_first_intent,omitempty"`   // 创建时直接下发一条种子意图(内容=描述+目标),让 worker 免等首轮 planner 直接开跑;省略/null=默认关闭,走标准先规划再执行。显式传 true 才开(CTF 常一 work 解决时可省掉开跑前的 planner 轮)。
-	CoverageEnabled       *bool    `json:"coverage_enabled,omitempty"`    // 资产覆盖度功能;省略/null=默认开(true)。false=关闭覆盖度计算/展示/自动累积范围+隐藏 add_task_scope/list_untested_assets。company 关联不受影响。
+	LLMProfileID          *int64   `json:"llm_profile_id,omitempty"`    // 指定运行本任务的 LLM 配置;省略/null=用激活配置
+	LLMProfileIDs         []int64  `json:"llm_profile_ids,omitempty"`   // 有序任务级配置链;第一项初始生效
+	SourceTaskIDs         []string `json:"source_task_ids,omitempty"`   // 仅直接、只读继承的来源任务
+	CompanyIDs            []int64  `json:"company_ids,omitempty"`       // 关联企业范围并快照关联当前企业资产;不复制资产或强制生成意图
+	AssetIDs              []int64  `json:"asset_ids,omitempty"`         // 创建时独立选择的全局资产
+	TimeoutSeconds        int      `json:"timeout_seconds"`             // 任务级超时(秒);0/省略=不限时
+	PlanHeartbeatSeconds  int      `json:"plan_heartbeat_seconds"`      // planner 心跳触发间隔(秒);0/省略=默认600(10min);下限=默认=600,低于自动抬到600
+	SeedFirstIntent       *bool    `json:"seed_first_intent,omitempty"` // 创建时直接下发一条种子意图(内容=描述+目标),让 worker 免等首轮 planner 直接开跑;省略/null=默认关闭,走标准先规划再执行。显式传 true 才开(CTF 常一 work 解决时可省掉开跑前的 planner 轮)。
+	CoverageEnabled       *bool    `json:"coverage_enabled,omitempty"`  // 资产覆盖度功能;省略/null=默认开(true)。false=关闭覆盖度计算/展示/自动累积范围+隐藏 add_task_scope/list_untested_assets。company 关联不受影响。
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -1710,50 +1683,12 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "关联资产无效："+err.Error())
 		return
 	}
-	// 联盟系统（fork-only: feat/alliance-system）：把选中条目的入口登记成
-	// 标准资产（复用同 URL 的既有行），并把有界简报并入任务描述——描述进
-	// 探索图起点、planner 可读，完整情报留在台账页按需查看。
-	allianceSystemIDs := normalizeAllianceSystemIDs(req.AllianceSystemIDs)
-	if len(allianceSystemIDs) > maxAllianceTaskSystems {
-		writeErr(w, 400, fmt.Sprintf("一次最多选择 %d 个联盟系统", maxAllianceTaskSystems))
-		return
-	}
-	var allianceSnapshots []db.TaskAllianceSnapshot
-	if len(allianceSystemIDs) > 0 {
-		allianceAssetIDs, brief, resErr := s.resolveAllianceTargets(allianceSystemIDs)
-		if resErr != nil {
-			writeErr(w, 400, "联盟系统解析失败："+resErr.Error())
-			return
-		}
-		if len(allianceAssetIDs) > 0 {
-			assetIDs = append(assetIDs, allianceAssetIDs...)
-			if assetIDs, err = db.NormalizeTaskAssetIDs(assetIDs); err != nil {
-				writeErr(w, 400, "关联资产无效："+err.Error())
-				return
-			}
-		}
-		if brief != "" {
-			if strings.TrimSpace(req.Description) == "" || req.Description == "未命名任务" {
-				req.Description = brief
-			} else {
-				req.Description = strings.TrimSpace(req.Description) + "\n\n" + brief
-			}
-		}
-		// 画像快照与任务在同一事务里落库；正式画像之后的修改不会影响本任务。
-		snaps, snapErr := s.allianceStore().BuildTaskSnapshots(allianceSystemIDs)
-		if snapErr != nil {
-			writeErr(w, 400, "联盟画像快照失败："+snapErr.Error())
-			return
-		}
-		allianceSnapshots = snaps
-	}
 	t, err := s.m.CreateTaskWithOptions(req.Description, req.Goal, db.TaskCreateOptions{
 		Name: strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, AssetIDs: assetIDs, LLMProfileIDs: req.LLMProfileIDs,
 		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
 		CoverageEnabled:       req.CoverageEnabled,
 		AssetApprovalTemplate: req.AssetApprovalTemplate,
-		AllianceSnapshots:     allianceSnapshots,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrTaskCategoryInvalid) || errors.Is(err, db.ErrTaskCategoryNotFound) {
@@ -1770,13 +1705,6 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, 500, err.Error())
 		return
-	}
-	if len(allianceSystemIDs) > 0 {
-		if taskID, convErr := strconv.ParseInt(strings.TrimSpace(t.ID), 10, 64); convErr == nil && taskID > 0 {
-			if err := s.m.pg.Alliance().LinkAllianceSystemsToTask(taskID, allianceSystemIDs); err != nil {
-				log.Printf("[alliance] 任务 #%s 关联联盟系统失败: %v", t.ID, err)
-			}
-		}
 	}
 	log.Printf("[task] 新建任务 #%s «%s» 目标: %s", t.ID, req.Description, req.Goal)
 	// 共享的建后流程(seed + 种子意图 + 后台目标分解 + engine.Run),与 spawn_task 复用同一段。

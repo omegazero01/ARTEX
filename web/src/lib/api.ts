@@ -21,18 +21,6 @@ import type {
   Agent,
   AgentDetail,
   AgentTrigger,
-  AllianceEndpoint,
-  AllianceEvidenceItem,
-  AllianceFeedbackRun,
-  AllianceProfile,
-  AllianceProfileDocument,
-  AllianceRevision,
-  AllianceSuggestion,
-  AllianceTaskReading,
-  AllianceTaskSnapshot,
-  AllianceStats,
-  AllianceSystem,
-  AllianceSystemInput,
   ArchiveBatchItem,
   Asset,
   Audit,
@@ -263,7 +251,6 @@ export const api = {
     sourceTaskIds?: string[];
     companyIds?: number[];
     assetIds?: number[];
-    allianceSystemIds?: number[];
     timeoutSeconds?: number;
     seedFirstIntent?: boolean;
     planHeartbeatSeconds?: number;
@@ -278,7 +265,6 @@ export const api = {
       source_task_ids: input.sourceTaskIds ?? [],
       company_ids: input.companyIds ?? [],
       asset_ids: input.assetIds ?? [],
-      alliance_system_ids: input.allianceSystemIds ?? [],
       asset_approval_template: input.assetApprovalTemplate ?? "all_assets",
       timeout_seconds: input.timeoutSeconds ?? 0,
       seed_first_intent: input.seedFirstIntent ?? false,
@@ -458,57 +444,6 @@ export const api = {
   deleteAssets: (ids: number[]) =>
     http<{ deleted: number }>("/assets", { method: "DELETE", body: JSON.stringify({ ids }) }),
 
-  // ---- 联盟系统台账（fork-only: feat/alliance-system）----
-  // 列表（q/platform/tag 过滤）；统计；简报预览（与新建任务时写入的文本一致）。
-  allianceSystems: (q = "", platform = "", tag = "") =>
-    get<{ systems: AllianceSystem[] }>(
-      `/alliance/systems?q=${encodeURIComponent(q)}&platform=${encodeURIComponent(platform)}&tag=${encodeURIComponent(tag)}`,
-    ).then((r) => r?.systems ?? []),
-  allianceSystem: (id: number) =>
-    get<{ system: AllianceSystem; endpoints: AllianceEndpoint[] }>(`/alliance/systems/${id}`),
-  createAllianceSystem: (input: AllianceSystemInput) => post<{ id: number }>("/alliance/systems", input),
-  updateAllianceSystem: (id: number, input: AllianceSystemInput) =>
-    patch<{ ok: boolean }>(`/alliance/systems/${id}`, input),
-  deleteAllianceSystem: (id: number) => del<{ ok: boolean }>(`/alliance/systems/${id}`),
-  addAllianceEndpoint: (id: number, input: { url: string; note?: string }) =>
-    post<{ id: number }>(`/alliance/systems/${id}/endpoints`, input),
-  deleteAllianceEndpoint: (id: number, endpointId: number) =>
-    del<{ ok: boolean }>(`/alliance/systems/${id}/endpoints/${endpointId}`),
-  allianceStats: () => get<AllianceStats>("/alliance/stats"),
-  allianceBrief: (ids: number[]) => get<{ brief: string }>(`/alliance/brief?ids=${ids.join(",")}`),
-  // ---- 联盟画像（fork-only: feat/alliance-profile）----
-  allianceProfileTemplate: () => get<{ template: AllianceProfileDocument }>("/alliance/template"),
-  allianceProfile: (id: number) => get<{ profile: AllianceProfile }>(`/alliance/systems/${id}/profile`),
-  saveAllianceProfile: (
-    id: number,
-    input: { expected_version: number; environment: string; document: AllianceProfileDocument },
-  ) => put<{ profile: AllianceProfile }>(`/alliance/systems/${id}/profile`, input),
-  allianceProfileHistory: (id: number) =>
-    get<{ revisions: AllianceRevision[] }>(`/alliance/systems/${id}/profile/history`).then((r) => r?.revisions ?? []),
-  allianceSuggestions: (params: { systemId?: number; taskId?: number } = {}) => {
-    const qs = new URLSearchParams();
-    if (params.systemId) qs.set("system_id", String(params.systemId));
-    if (params.taskId) qs.set("task_id", String(params.taskId));
-    return get<{ suggestions: AllianceSuggestion[] }>(`/alliance/suggestions?${qs.toString()}`).then(
-      (r) => r?.suggestions ?? [],
-    );
-  },
-  reviewAllianceSuggestion: (
-    id: number,
-    input: { decision: "accepted" | "rejected"; expected_version: number; value?: string },
-  ) => post<{ suggestion: AllianceSuggestion }>(`/alliance/suggestions/${id}/review`, input),
-  allianceSuggestionEvidence: (id: number) =>
-    get<{ evidence: AllianceEvidenceItem[] }>(`/alliance/suggestions/${id}/evidence`).then((r) => r?.evidence ?? []),
-  taskAllianceProfile: (taskId: string | number) =>
-    get<{ snapshots: AllianceTaskSnapshot[]; reading: AllianceTaskReading | null }>(
-      `/tasks/${taskId}/alliance-profile`,
-    ),
-  readTaskAllianceProfile: (taskId: string | number) =>
-    post<{ reading: AllianceTaskReading | null }>(`/tasks/${taskId}/alliance-profile/read`, {}),
-  taskAllianceFeedback: (taskId: string | number) =>
-    get<{ runs: AllianceFeedbackRun[]; suggestions: AllianceSuggestion[] }>(`/tasks/${taskId}/alliance-feedback`),
-  retryTaskAllianceFeedback: (taskId: string | number, runId: number) =>
-    post<{ ok: boolean }>(`/tasks/${taskId}/alliance-feedback/${runId}/retry`, {}),
   // task-scoped view of the same endpoint — server-side paginated like `assets`
   taskAssets: (taskId: string, type = "", limit = 50, offset = 0, tested = "all", approval = "all") =>
     get<{ count: number; total: number; assets: Asset[] }>(
