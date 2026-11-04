@@ -1564,16 +1564,21 @@ func (s *ExplorationStore) ActivityListForTerminalIntent(nodeID, sinceID int64, 
 //
 // A zero value (all empty) matches the whole task (no session filter).
 type ActivitySessionFilter struct {
-	Worker  string
-	NodeID  *int64
-	Main    bool // main-agent session
-	MainSeg *int // segment for the main session (nil == current, resolved by caller; 0 == original)
+	Worker    string
+	NodeID    *int64
+	Main      bool // main-agent session
+	MainSeg   *int // segment for the main session (nil == current, resolved by caller; 0 == original)
+	Inherited bool // 继承会话：只暴露源任务里已结束意图的可见活动（照搬 SERIES）
 }
 
 func (f ActivitySessionFilter) cond(argStart int) (string, []any) {
 	switch {
 	case f.NodeID != nil:
-		return fmt.Sprintf(" AND node_id=$%d", argStart), []any{*f.NodeID}
+		cond := fmt.Sprintf(" AND node_id=$%d", argStart)
+		if f.Inherited {
+			cond += " AND kind NOT IN ('thinking','usage') AND EXISTS (SELECT 1 FROM exploration_nodes n WHERE n.id=activity.node_id AND n.exploration_id=activity.exploration_id AND n.kind='intent' AND n.state IN ('done','blocked','exhausted','stopped'))"
+		}
+		return cond, []any{*f.NodeID}
 	case f.Main:
 		seg := 0
 		if f.MainSeg != nil {

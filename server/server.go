@@ -773,6 +773,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/nodes", s.explorationNodes)
 	mux.HandleFunc("GET /api/exploration/activity", s.activity)
 	mux.HandleFunc("GET /api/exploration/activity/history", s.activityHistory)
+	mux.HandleFunc("GET /api/exploration/activity/search", s.activitySearch)
 	mux.HandleFunc("GET /api/exploration/main-sessions", s.mainSessions)
 	mux.HandleFunc("POST /api/exploration/main-session/new", s.newMainSession)
 	mux.HandleFunc("GET /api/exploration/activity/stream", s.streamActivity)
@@ -2780,6 +2781,22 @@ func (s *Server) activityHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	before := int64(atoiDefault(q.Get("before"), 0))
 	limit := min(atoiDefault(q.Get("limit"), 200), 500) // cap so one request can't pull an unbounded slice
+	// around/after：定位到某条活动附近（搜索命中跳转用），与 before 互斥。
+	var anchor, after int64
+	for name, target := range map[string]*int64{"around": &anchor, "after": &after} {
+		if raw := q.Get(name); raw != "" {
+			value, parseErr := strconv.ParseInt(raw, 10, 64)
+			if parseErr != nil || value <= 0 {
+				writeErr(w, 400, "bad "+name)
+				return
+			}
+			*target = value
+		}
+	}
+	if (anchor > 0 && after > 0) || ((anchor > 0 || after > 0) && before != 0) {
+		writeErr(w, 400, "conflicting cursors")
+		return
+	}
 	store, sourceTaskID, err := activitySessionStore(t, filter)
 	if err != nil {
 		writeErr(w, 500, err.Error())
@@ -2797,13 +2814,23 @@ func (s *Server) activityHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	filter.Inherited = sourceTaskID > 0
 	var items []db.Activity
-	var hasMore bool
-	if sourceTaskID > 0 {
+	var hasMore, hasNewer bool
+	switch {
+	case anchor > 0 || after > 0:
+		var window db.ActivityWindow
+		window, err = store.ActivityWindow(filter, anchor, after, limit)
+		items, hasMore, hasNewer = window.Items, window.HasOlder, window.HasNewer
+		if errors.Is(err, db.ErrActivityAnchor) {
+			writeErr(w, 404, "source activity unavailable")
+			return
+		}
+	case sourceTaskID > 0:
 		// Source sessions are readable only while the intent remains terminal. The
 		// DB query also removes model reasoning/accounting rows from inherited data.
 		items, hasMore, err = store.ActivityPageForTerminalIntent(*filter.NodeID, before, limit)
-	} else {
+	default:
 		items, hasMore, err = store.ActivityPage(filter, before, limit)
 	}
 	if err != nil {
@@ -2821,11 +2848,17 @@ func (s *Server) activityHistory(w http.ResponseWriter, r *http.Request) {
 	if len(items) > 0 {
 		earliest = items[0].ID
 	}
+	latest := after
+	if len(items) > 0 {
+		latest = items[len(items)-1].ID
+	}
 	writeJSON(w, 200, map[string]any{
 		"items":           activityDTOs(items),
 		"snapshot_cursor": snapshot,
 		"earliest_cursor": earliest,
+		"latest_cursor":   latest,
 		"has_more":        hasMore,
+		"has_newer":       hasNewer,
 	})
 }
 
