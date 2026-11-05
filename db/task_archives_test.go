@@ -258,14 +258,7 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.DeleteFindingWithFeedback(deletedID, "do not repeat"); err != nil {
-		t.Fatal(err)
-	}
-	rules, err := d.FindingSuppressionRules(t.Context(), task.ID, 0, 20, false)
-	if err != nil || len(rules) != 1 {
-		t.Fatal(rules, err)
-	}
-	if err = d.RevokeFindingSuppression(t.Context(), task.ID, rules[0].ID); err != nil {
+	if _, err = d.DeleteFinding(deletedID); err != nil {
 		t.Fatal(err)
 	}
 	if err = d.Exploration(task.ExplorationID).SavePlannerTodos(t.Context(), []map[string]any{{"content": "archive planner todo", "status": "pending"}}); err != nil {
@@ -345,14 +338,6 @@ VALUES($1,$2,0,'quota_exhausted','balance exhausted',$3,$4,$3)`, task.ID, llmPro
 	)
 	if err != nil {
 		t.Fatal(err)
-	}
-	restoredRules, err := d.FindingSuppressionRules(t.Context(), task.ID, 0, 20, false)
-	if err != nil || len(restoredRules) != 1 || restoredRules[0].RevokedAt == nil || restoredRules[0].ID != rules[0].ID {
-		t.Fatal("suppression archive lost", restoredRules, err)
-	}
-	feedback, err := d.Exploration(task.ExplorationID).FindingDeletionFeedback(0, 20)
-	if err != nil || len(feedback) != 1 || feedback[0].RuleStatus != "revoked" {
-		t.Fatal("feedback archive lost", feedback, err)
 	}
 	warningFound := false
 	for _, warning := range warnings {

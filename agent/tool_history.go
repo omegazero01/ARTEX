@@ -80,8 +80,6 @@ func normalizedReadQuery(name string, raw json.RawMessage) string {
 		}
 		b, _ := json.Marshal(v)
 		return name + ":" + string(b)
-	case "list_finding_deletion_feedback":
-		defaults = map[string]any{"before": json.Number("0"), "limit": json.Number("20")}
 	case "check_target_access":
 		q, err := decodeTargetAccess(raw)
 		if err != nil {

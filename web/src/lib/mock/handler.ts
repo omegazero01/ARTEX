@@ -24,7 +24,6 @@ import type {
   Conversation,
   Finding,
   FindingRetest,
-  FindingSuppressionRule,
   IntentAsset,
   LLMRetryPolicy,
   MCPServer,
@@ -1473,6 +1472,8 @@ function parseBody(body?: BodyInit | null): Record<string, unknown> {
   }
 }
 
+let httpEntrySettings = { enabled: false, username: "entry", password_set: false };
+
 export async function mockHandle<T>(method: string, rawPath: string, body?: BodyInit | null): Promise<T> {
   advanceMockRetests();
   await delay();
@@ -2907,27 +2908,6 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     }
     return result;
   }
-  if (seg[0] === "tasks" && seg[2] === "finding-suppression-rules") {
-    if (!mockTasks.some((task) => task.id === seg[1])) throw new Error("task not found");
-    if (m === "GET" && seg.length === 3) {
-      const before = Number(q.get("before") || 0);
-      const limit = Number(q.get("limit") || 20);
-      if (!Number.isInteger(before) || before < 0 || !Number.isInteger(limit) || limit < 1 || limit > 50)
-        throw new Error("invalid pagination");
-      const rows = mockFindingSuppressionRules
-        .filter((r) => r.task_id === seg[1] && (!before || Number(r.id) < before))
-        .sort((a, b) => Number(b.id) - Number(a.id));
-      const items = rows.slice(0, limit);
-      return { items, has_more: rows.length > limit, next_before: Number(items.at(-1)?.id || 0) };
-    }
-    if (m === "POST" && seg.length === 5 && seg[4] === "revoke") {
-      const rule = mockFindingSuppressionRules.find((r) => r.id === seg[3] && r.task_id === seg[1]);
-      if (!rule) throw new Error("rule not found");
-      rule.revoked_at ||= new Date().toISOString();
-      return { revoked: true };
-    }
-    throw new Error("invalid suppression route");
-  }
   // 单条 finding:GET 详情 / PATCH 改状态/严重度/名称/类别(demo 直接改内存对象)。
   if (seg[0] === "exploration" && seg[1] === "findings" && seg.length === 3 && seg[2] !== "stats") {
     const f = mockFindings.find((x) => x.id === seg[2]);
@@ -2938,34 +2918,6 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       throw new Error("finding not found in task");
     if (m !== "GET" && context && f.task_id !== context) throw new Error("来源任务漏洞只读");
     if (m === "DELETE") {
-      if (b.reason !== undefined && typeof b.reason !== "string") throw new Error("删除原因须为字符串");
-      const reason = String(b.reason ?? "").trim();
-      if (Array.from(reason).length > 2000) throw new Error("删除原因最多2000字符");
-      mockFindingDeletionFeedback.push({
-        finding_id: f.id,
-        task_id: f.task_id ?? null,
-        title: f.name || "",
-        vulnclass: f.vulnclass,
-        reason,
-        deleted_at: new Date().toISOString(),
-      });
-      if (f.task_id && mockTasks.some((task) => task.id === f.task_id)) {
-        const assetIDs = (f.assets ?? []).map((a) => Number(a.id)).filter(Number.isFinite);
-        const targets = mockAssets.filter((a) => assetIDs.includes(a.id)).map((a) => {
-          let url: string | undefined;
-          try {
-            const parsed = new URL(a.url ?? "");
-            parsed.username = parsed.password = parsed.search = parsed.hash = "";
-            url = parsed.toString();
-          } catch { /* Non-URL assets use domain/IP identity. */ }
-          return { type: a.type, domain: a.domain, ip: a.ip, port: a.port, url, bundle_id: a.bundle_id };
-        });
-        mockFindingSuppressionRules.push({
-          id: String(++mockSuppressionID), feedback_id: String(mockFindingDeletionFeedback.length),
-          task_id: f.task_id, title: f.name || "", vulnclass: f.vulnclass, summary: f.summary || "",
-          asset_ids: assetIDs, targets, reason, created_at: new Date().toISOString(),
-        });
-      }
       mockFindings.splice(mockFindings.indexOf(f), 1);
       return { deleted: true, id: f.id };
     }
@@ -3710,16 +3662,3 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     : {};
 }
 
-export const mockFindingDeletionFeedback: {
-  finding_id: string;
-  task_id: string | null;
-  title: string;
-  vulnclass: string;
-  reason: string;
-  deleted_at: string;
-}[] = [];
-
-let httpEntrySettings = { enabled: false, username: "entry", password_set: false };
-
-export const mockFindingSuppressionRules: FindingSuppressionRule[] = [];
-let mockSuppressionID = 0;

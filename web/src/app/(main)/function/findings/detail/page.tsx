@@ -80,7 +80,7 @@ function FindingDetailInner({ id, contextTask }: { id: string; contextTask?: str
                 onRefresh={reload}
                 onDelete={async (finding, reason) => {
                   if (!finding.finding_id) return;
-                  await api.deleteFinding(finding.finding_id, reason);
+                  await api.deleteFinding(finding.finding_id);
                   router.replace("/function/findings");
                 }}
               />

@@ -2139,7 +2139,7 @@ func (t *ToolSet) proveGoal() actool.CoreTool {
 // --- worker write tools ---
 
 func (t *ToolSet) addFinding() actool.CoreTool {
-	return writeTool("report_finding", "记录确认的漏洞，用 evidence 提供可验证证据。受当前任务删除禁报规则校验；命中后仅用户可解除，新证据可写事实，勿改名重报。任务上下文传当前 intent_id。返回的 finding_id 是独立漏洞记录 ID，finding_node_id 是探索节点 ID（第一行保留该节点编号）。", obj(map[string]any{
+	return writeTool("report_finding", "记录确认的漏洞，用 evidence 提供命令输出、日志等可验证证据。任务上下文传当前 intent_id。返回的 finding_id 是独立漏洞记录 ID，finding_node_id 是探索节点 ID（第一行保留该节点编号）。", obj(map[string]any{
 		"vulnclass": str("漏洞类别"), "name": str("漏洞名称"), "severity": str("critical|high|medium|low"), "summary": str("发现摘要"),
 		"intent_id": idp("当前任务的意图 id"), "asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "受影响资产 ID，JSON 整数数组，如 [1,2]；不要传字符串"},
 		"reproduction":     reproductionSchema(),
@@ -3090,7 +3090,7 @@ func (t *ToolSet) listWorkerTraces() actool.CoreTool {
 // PlannerTools is the read + intent-generation + goal-judgement tool set.
 func (t *ToolSet) PlannerTools() []actool.CoreTool {
 	return []actool.CoreTool{
-		t.listFindingDeletionFeedback(), t.listTaskAssets(), t.checkTargetAccess(),
+		t.listTaskAssets(), t.checkTargetAccess(),
 		t.markHostProxy(), t.checkHostProxy(),
 		t.graphOverview(), t.contextSearch(), t.contextGet(),
 		t.addIntent(), t.proveGoal(), t.killWorkTool(), t.steerWorkTool(), t.addFinding(),
