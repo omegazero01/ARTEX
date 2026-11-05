@@ -580,7 +580,7 @@ export default function FindingsPage() {
   const deleteFinding = React.useCallback(
     async (f: Finding, reason: string) => {
       if (!f.finding_id) return;
-      await api.deleteFinding(f.finding_id, reason);
+      await api.deleteFinding(f.finding_id);
       setFindings((cur) => cur.filter((x) => !isSameFinding(x, f)));
       setSelectedIds((current) => {
         const next = new Set(current);

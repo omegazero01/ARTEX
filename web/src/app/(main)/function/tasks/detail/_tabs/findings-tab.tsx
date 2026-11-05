@@ -9,7 +9,6 @@ import { FindingWorkspaceDetail } from "@/components/finding-detail-content";
 import { FindingPagination } from "@/components/finding-pagination";
 import { FindingLayoutToggle, FindingPresentation, useFindingPresentation } from "@/components/finding-presentation";
 import { FindingSelector } from "@/components/finding-selector";
-import { FindingSuppressionRules } from "@/components/finding-suppression-rules";
 import { FindingsToolbar } from "@/components/findings-toolbar";
 import { useNotificationRead } from "@/components/task-notifications";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -151,7 +150,6 @@ function TaskFindings({ taskId }: { taskId: string }) {
         }
         actions={
           <>
-            <FindingSuppressionRules taskId={taskId} readOnly={filters.scope === "inherited"} />
             <Button
               variant="ghost"
               size="icon"
@@ -179,7 +177,7 @@ function TaskFindings({ taskId }: { taskId: string }) {
               onChanged={refresh}
               onDelete={async (finding, reason) => {
                 if (!finding.finding_id) return;
-                await api.deleteFinding(finding.finding_id, reason);
+                await api.deleteFinding(finding.finding_id);
                 toggle([finding.finding_id], false);
                 setSelectedKey(null);
                 presentation.setDetailOpen(false);

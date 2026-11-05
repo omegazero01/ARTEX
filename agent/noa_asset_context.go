@@ -62,10 +62,6 @@ func (p assetContextProvider) filter(ctx context.Context, req llm.CompletionRequ
 	}
 	out = refreshPlannerStateHistory(ctx, out)
 	out = boundRetrievalHistory(deduplicateToolHistory(out))
-	out, err = p.refreshFindingFeedback(ctx, out)
-	if err != nil {
-		return out, err
-	}
 	out = refreshWorkerTodos(ctx, out)
 	for _, r := range refs {
 		b := &out.Messages[r.m].Content[r.b]

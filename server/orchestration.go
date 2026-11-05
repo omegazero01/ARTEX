@@ -508,7 +508,6 @@ func (s *Server) seedOrchestrationTools() {
 		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, autoAgents)
 	}
 	s.refreshBuiltinToolSchemas()
-	s.seedFindingSuppressionBindings()
 	// Context catalog migration preserves the currently configured bindings and
 	// only replaces exact code-default prompts; superseded reseeds must not run.
 	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)

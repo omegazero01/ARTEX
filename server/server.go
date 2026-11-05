@@ -40,14 +40,12 @@ var BuildVersion = "dev"
 // Server exposes the SERIES backend over a JSON HTTP API for the shadcn/ui
 // frontend.
 type Server struct {
-	suppressionOnce sync.Once
-	suppression     *findingSuppressionService
-	httpAuth        *httpEntryAuth
-	httpAuthOnce    sync.Once
-	httpAuthErr     error
-	m               *Manager
-	engine          *Engine
-	ctx             context.Context
+	httpAuth     *httpEntryAuth
+	httpAuthOnce sync.Once
+	httpAuthErr  error
+	m            *Manager
+	engine       *Engine
+	ctx          context.Context
 
 	skillDir string // root directory for skill subdirectories
 	jwtKey   []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
@@ -675,7 +673,7 @@ func (s *Server) providerForProfileContext(ctx context.Context, id int64) (llm.P
 		s.provCacheMu.Unlock()
 		p, err := s.m.pg.ProfileByIDContext(ctx, id)
 		if err != nil {
-			return nil, agent.Config{}, &suppressionInfrastructureError{err}
+			return nil, agent.Config{}, err
 		}
 		if p == nil || p.APIKey == "" {
 			return nil, agent.Config{}, fmt.Errorf("LLM profile #%d is missing or invalid", id)
@@ -684,7 +682,7 @@ func (s *Server) providerForProfileContext(ctx context.Context, id int64) (llm.P
 		var raw string
 		err = s.m.pg.QueryRowContext(ctx, `SELECT value FROM settings WHERE key='llm_retry_policy'`).Scan(&raw)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, cfg, &suppressionInfrastructureError{err}
+			return nil, cfg, err
 		}
 		var policy db.LLMRetryPolicy
 		if err == nil {
@@ -934,8 +932,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/findings/retests/active", s.listActiveFindingRetests)
 	mux.HandleFunc("POST /api/exploration/findings/{id}/retests", s.startFindingRetest)
 	mux.HandleFunc("PATCH /api/exploration/findings/{id}", s.patchFinding)
-	mux.HandleFunc("GET /api/tasks/{id}/finding-suppression-rules", s.listFindingSuppression)
-	mux.HandleFunc("POST /api/tasks/{id}/finding-suppression-rules/{rule_id}/revoke", s.revokeFindingSuppression)
 	mux.HandleFunc("DELETE /api/exploration/findings/{id}", s.deleteFinding)
 	mux.HandleFunc("GET /api/exploration/intents", s.intents)
 	mux.HandleFunc("GET /api/exploration/graph", s.explorationGraph)
@@ -2509,49 +2505,25 @@ func (s *Server) deleteFinding(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "bad finding id")
 		return
 	}
-	type deleteInput struct {
-		Reason json.RawMessage `json:"reason"`
-	}
-	var input *deleteInput
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768))
-	decoder.DisallowUnknownFields()
-	decodeErr := decoder.Decode(&input)
-	if errors.Is(decodeErr, io.EOF) {
-		input = &deleteInput{}
-	} else if decodeErr != nil || input == nil {
-		writeErr(w, 400, "删除参数格式错误")
-		return
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeErr(w, 400, "删除参数格式错误")
-		return
-	}
-	reasonText := ""
-	if len(input.Reason) > 0 && (string(input.Reason) == "null" || json.Unmarshal(input.Reason, &reasonText) != nil) {
-		writeErr(w, 400, "删除原因须为字符串")
-		return
-	}
-	reason, err := db.NormalizeFindingDeletionReason(reasonText)
-	if err != nil {
-		writeErr(w, 400, err.Error())
-		return
-	}
-	feedback, err := s.m.pg.DeleteFindingWithFeedback(id, reason)
+	meta, err := s.m.pg.FindingAccessMetadata(r.Context(), id)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	if feedback == nil {
+	n, err := s.m.pg.DeleteFinding(id)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if n == 0 {
 		writeErr(w, 404, "finding not found")
 		return
 	}
-	if feedback.TaskID != nil {
-		if task := s.m.ResolveTask(strconv.FormatInt(*feedback.TaskID, 10)); task != nil && s.engine != nil && s.resolvedTaskStatus(task) == "running" {
-			task.NotifyFindingDeleted(feedback.ID)
+	if meta != nil && meta.TaskID != nil {
+		if task := s.m.ResolveTask(strconv.FormatInt(*meta.TaskID, 10)); task != nil && s.engine != nil && s.resolvedTaskStatus(task) == "running" {
+			task.NotifyFindingDeleted(id)
 		}
 	}
-
 	writeJSON(w, 200, map[string]any{"deleted": true, "id": id})
 }
 
