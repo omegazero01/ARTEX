@@ -64,7 +64,7 @@ func (t *ToolSet) intentStopTool(name, role, description string, stop IntentStop
 		}
 		// A user's stop must remain available even after asset access is revoked.
 		if role == "planner" && !t.nodeAuthorized(node) {
-			return actool.Errorf("该意图关联的任务资产未获授权或已被封禁"), nil
+			return actool.Errorf("该意图关联的任务资产不在当前任务范围内或不可用"), nil
 		}
 		result, err := stop(ctx, t.taskID, id, strings.TrimSpace(in.Reason))
 		if err != nil {

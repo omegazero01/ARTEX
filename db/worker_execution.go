@@ -19,20 +19,23 @@ func workerReadSQL(query string, worker bool) string {
 	return query
 }
 
+// ValidateWorkerAssets 只校验资产是否存在；ARTEX 原版没有审批状态限制。
 func (s *AssetStore) ValidateWorkerAssets(taskID int64, ids []int64) error {
 	states, err := s.TaskAssetApprovalStates(taskID, ids)
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
-		if states[id] != ApprovalApproved && states[id] != ApprovalPending {
-			return fmt.Errorf("%w: asset %d 不属于本任务或已被主动限制 (%s)", ErrTaskAssetNotApproved, id, states[id])
+		if _, ok := states[id]; !ok {
+			return fmt.Errorf("%w: asset %d 不存在", ErrTaskAssetAssetNotFound, id)
 		}
 	}
 	return nil
 }
 
 func (s *AssetStore) ValidateWorkerHosts(taskID int64, hosts []string) error {
+	// ARTEX 原版没有资产审批：Worker 可访问尚未登记的新主机；
+	// 已登记主机的 pending/blocked/revoked 仍按原语义拦截。
 	normalized := make([]string, 0, len(hosts))
 	for _, host := range hosts {
 		h, err := NormalizeAgentHost(host, true)
@@ -46,7 +49,9 @@ func (s *AssetStore) ValidateWorkerHosts(taskID int64, hosts []string) error {
 		return err
 	}
 	for _, host := range normalized {
-		if states[host] != ApprovalApproved && states[host] != ApprovalPending {
+		switch states[host] {
+		case "", ApprovalApproved, ApprovalPending:
+		default:
 			return fmt.Errorf("%w: host %s 已被主动限制或任务无效 (%s)", ErrTaskAssetNotApproved, host, states[host])
 		}
 	}

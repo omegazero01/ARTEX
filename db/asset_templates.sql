@@ -143,6 +143,8 @@ RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
 DECLARE denied BOOLEAN; revoked BOOLEAN; exact_pending BOOLEAN; exact_approved BOOLEAN;
 BEGIN
  IF NOT EXISTS(SELECT 1 FROM tasks WHERE id=tid AND deleted_at IS NULL) THEN RETURN NULL; END IF;
+ -- ARTEX 原版没有资产审批：任务存在即视为全部主机已批准。
+ RETURN 'approved';
  IF EXISTS(SELECT 1 FROM task_asset_blocks b WHERE b.task_id=tid
    AND b.asset_type IN ('root_domain','subdomain','ip') AND b.host_key<>''
    AND b.host_key=host) THEN RETURN 'blocked'; END IF;

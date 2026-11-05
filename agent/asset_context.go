@@ -11,7 +11,6 @@ import (
 
 	"github.com/Autumn-27/norma/llm"
 	"github.com/neouks/series/db"
-	"github.com/neouks/series/guard"
 )
 
 func (t *ToolSet) authorizedScope(rows []db.TaskScope) []db.TaskScope {
@@ -233,53 +232,8 @@ func (p assetContextProvider) filterPlain(ctx context.Context, req llm.Completio
 	if refreshErr != nil {
 		return req, refreshErr
 	}
-	var accessSnapshot *targetAccessSnapshot
-	req, accessSnapshot, refreshErr = p.refreshTargetAccess(ctx, req)
-	if refreshErr != nil {
-		return req, refreshErr
-	}
-	if ri.TaskID == p.taskID && (ri.AgentKey == "planner" || ri.AgentKey == "mainagent") {
-		rule := targetAccessRule
-		if main {
-			rule = mainAssetExecutionRule
-		}
-		req.System = append(append([]string(nil), req.System...), rule)
-	}
-	req, refreshErr = p.refreshApprovalManagementHistory(ctx, req)
-	if refreshErr != nil {
-		return req, refreshErr
-	}
-	template, err := p.assets.WithReadContext(ctx).TaskApprovalTemplate(p.taskID)
-	if err != nil {
-		return req, err
-	}
-	skips, err := p.assets.WithReadContext(ctx).ActiveTaskAssetSkips(p.taskID, guard.AssetSkipScope(ctx))
-	if err != nil {
-		return req, err
-	}
-	policy := "仅用户明确提供或人工批准的域名/IP可测试；其他发现登记后等待用户审批。"
-	switch template {
-	case "all_assets":
-		policy = "所有合法新发现域名/IP由系统自动批准，可直接测试，无需申请审批。"
-	case "related_assets":
-		policy = "用户目标同根域的子域名及有本任务DNS解析依据的IP由系统自动批准，可直接测试；其他发现登记后等待用户审批。"
-	}
-	if worker || main {
-		policy = "你只执行当前已下发意图，不创建新计划。执行中可访问并登记待审批或尚未登记的合法资产、写回事实和漏洞；pending 不限制执行，也不代表自动批准。历史 pending 拦截或等待审批提示已失效。用户封禁、撤回、删除、异常隔离及独立操作约束仍必须遵守。"
-		if main {
-			policy = mainAssetExecutionRule
-		}
-		filtered := skips[:0]
-		for _, skip := range skips {
-			if skip.State != db.ApprovalPending {
-				filtered = append(filtered, skip)
-			}
-		}
-		skips = filtered
-	}
-	req.System = append(append([]string(nil), req.System...), "资产模板："+policy+"审批仅作用于域名/IP，获准主机的所有端口、服务和接口无需单独审批。用户封禁、撤回及删除限制优先。"+db.TaskAssetSkipRule)
-	if list := db.TaskAssetSkipList(skips); list != "" {
-		req.System = append(req.System, list)
+	if ri.TaskID == p.taskID && (ri.AgentKey == "planner" || ri.AgentKey == "mainagent") && main {
+		req.System = append(append([]string(nil), req.System...), mainAssetExecutionRule)
 	}
 	type result struct {
 		message, block, content int
@@ -333,6 +287,7 @@ func (p assetContextProvider) filterPlain(ctx context.Context, req llm.Completio
 	for host := range hosts {
 		hostList = append(hostList, host)
 	}
+	var err error
 	hostStates := map[string]string{}
 	if len(hostList) > 0 {
 		hostStates, err = p.assets.WithReadContext(ctx).TaskHostApprovalStates(p.taskID, hostList)
@@ -345,11 +300,7 @@ func (p assetContextProvider) filterPlain(ctx context.Context, req llm.Completio
 		list = append(list, id)
 	}
 	var states map[int64]string
-	if accessSnapshot != nil {
-		states = accessSnapshot.assets
-	} else {
-		states, err = p.assets.WithReadContext(ctx).TaskAssetApprovalStates(p.taskID, list)
-	}
+	states, err = p.assets.WithReadContext(ctx).TaskAssetApprovalStates(p.taskID, list)
 	if err != nil {
 		return req, err
 	}
@@ -365,18 +316,7 @@ func (p assetContextProvider) filterPlain(ctx context.Context, req llm.Completio
 		nodeStore = nodeStore.WithWorkerRead()
 	}
 	var nodeStates map[int64]string
-	if accessSnapshot != nil {
-		nodeStates = map[int64]string{}
-		for id, row := range accessSnapshot.nodes {
-			if row.CanRead {
-				nodeStates[id] = db.ApprovalApproved
-			} else {
-				nodeStates[id] = "unavailable"
-			}
-		}
-	} else {
-		nodeStates, err = nodeStore.TaskNodeApprovalStates(p.taskID, list)
-	}
+	nodeStates, err = nodeStore.TaskNodeApprovalStates(p.taskID, list)
 	if err != nil {
 		return req, err
 	}

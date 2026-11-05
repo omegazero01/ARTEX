@@ -10,7 +10,7 @@ import (
 	"github.com/neouks/series/db"
 )
 
-const targetAccessRule = "当前结构化可见结果已复核授权，可直接使用；限制状态只适用于列出的 ID，未列出不代表已授权。已知不可用候选本轮跳过，继续已授权方向；未知 asset_ids/node_ids 用 check_target_access 一次批量预检，不逐项查询、不轮询审批、不删资产或替换父节点绕过。全部不可用则结束本轮，不凑意图。历史错误仅记录当时结果，资产和节点 access 元数据已刷新；审批变化后可重新考虑，执行时仍校验最新状态。"
+const targetAccessRule = "当前结构化可见结果已复核范围，可直接使用；限制状态只适用于列出的 ID，未列出不代表已授权。已知不可用候选本轮跳过，继续可用方向；未知 asset_ids/node_ids 用 check_target_access 一次批量预检，不逐项查询、不删资产或替换父节点绕过。全部不可用则结束本轮，不凑意图。历史错误仅记录当时结果，资产和节点 access 元数据已刷新；状态变化后可重新考虑，执行时仍校验最新状态。"
 
 type targetAccessQuery struct {
 	AssetIDs []int64 `json:"asset_ids"`
@@ -63,20 +63,13 @@ func decodeTargetAccess(raw json.RawMessage) (targetAccessQuery, error) {
 	return q, nil
 }
 func queryTargetAccess(store *db.AssetStore, taskID int64, q targetAccessQuery) (targetAccessView, error) {
+	// ARTEX 原版没有资产授权模块：所有目标一律视为可用。
 	var out targetAccessView
-	assets, err := store.TaskTargetAssetStates(taskID, q.AssetIDs)
-	if err != nil {
-		return out, err
-	}
-	nodes, err := store.TaskNodeAccess(taskID, q.NodeIDs)
-	if err != nil {
-		return out, err
-	}
 	for _, id := range q.AssetIDs {
-		out.Assets = append(out.Assets, targetAssetAccess{ID: id, State: assets[id], CanOperate: assets[id] == db.ApprovalApproved || (store.ExecutionRead() && assets[id] == db.ApprovalPending)})
+		out.Assets = append(out.Assets, targetAssetAccess{ID: id, State: db.ApprovalApproved, CanOperate: true})
 	}
 	for _, id := range q.NodeIDs {
-		out.Nodes = append(out.Nodes, targetNodeAccess{id, nodes[id]})
+		out.Nodes = append(out.Nodes, targetNodeAccess{ID: id, NodeAccess: db.NodeAccess{CanRead: true}})
 	}
 	return out, nil
 }
@@ -84,7 +77,7 @@ func (t *ToolSet) checkTargetAccess() actool.CoreTool {
 	ids := func() map[string]any {
 		return map[string]any{"type": "array", "maxItems": 50, "items": map[string]any{"type": "integer", "minimum": 1}}
 	}
-	return readTool("check_target_access", "仅未知候选按需批量查询审批元数据，不返回正文。asset_ids 用于意图资产，node_ids 用于节点读取/父节点授权；父节点仍须为 fact/finding。已复核可用候选不重复查询；不可用候选跳过。合计最多50个 ID。", obj(map[string]any{"asset_ids": ids(), "node_ids": ids()}), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
+	return readTool("check_target_access", "仅未知候选按需批量查询可用状态，不返回正文。asset_ids 用于意图资产，node_ids 用于节点读取/父节点授权；父节点仍须为 fact/finding。已复核可用候选不重复查询；不可用候选跳过。合计最多50个 ID。", obj(map[string]any{"asset_ids": ids(), "node_ids": ids()}), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
 		ri := RunInfoFrom(ctx)
 		if t.as == nil || t.taskID <= 0 || ri.TaskID != t.taskID || (ri.AgentKey != "planner" && ri.AgentKey != "mainagent") {
 			return actool.Errorf("check_target_access 需要匹配任务的 Planner/主 Agent 上下文"), nil
@@ -99,7 +92,7 @@ func (t *ToolSet) checkTargetAccess() actool.CoreTool {
 		}
 		out, err := queryTargetAccess(store, t.taskID, q)
 		if err != nil {
-			return actool.Errorf("审批查询失败: " + err.Error()), nil
+			return actool.Errorf("资产查询失败: " + err.Error()), nil
 		}
 		return jsonResult(out)
 	})
@@ -109,16 +102,7 @@ type targetAccessError struct{ Access targetAccessView }
 
 func (e *targetAccessError) Error() string { return "关联目标当前不可用，跳过本项" }
 func targetDenied(v targetAccessView) bool {
-	for _, a := range v.Assets {
-		if a.State != db.ApprovalApproved && !a.CanOperate {
-			return true
-		}
-	}
-	for _, n := range v.Nodes {
-		if !n.CanRead {
-			return true
-		}
-	}
+	_ = v
 	return false
 }
 func accessErrorResult(err error, access any) (actool.Result, error) {

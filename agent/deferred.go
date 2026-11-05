@@ -72,7 +72,7 @@ func plannerAssetGuidance(tools []actool.CoreTool) string {
 	} else {
 		text += "本轮未提供 asset_get，不得调用。"
 	}
-	return text + "工具读取权限不等于资产审批；未审批、封禁、撤回或越界方向仍须跳过，不能通过其他工具绕过。"
+	return text + "工具读取权限不等于任务范围授权；超出任务范围的方向仍须跳过，不能通过其他工具绕过。"
 }
 
 // seedUnlockFromHistory replays prior Skill() invocations in the conversation so

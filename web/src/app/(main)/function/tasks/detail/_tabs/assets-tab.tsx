@@ -414,8 +414,6 @@ export function AssetsTab({ taskId }: { taskId: string }) {
   const [addOpen, setAddOpen] = React.useState(false);
   const [removeTarget, setRemoveTarget] = React.useState<Asset | null>(null);
   const [removing, setRemoving] = React.useState(false);
-  const [approvalTarget, setApprovalTarget] = React.useState<Asset | null>(null);
-  const approvalConfirmLabel = approvalTarget?.blocked ? "批准并恢复测试资格" : "确认撤回";
   const [changingApproval, setChangingApproval] = React.useState(false);
   const assetsRequestRef = React.useRef(0);
   const dslMode = query.trim() !== "";
@@ -517,40 +515,7 @@ export function AssetsTab({ taskId }: { taskId: string }) {
 
   const removeButton = (asset: Asset) => {
     const derived = !["root_domain", "subdomain", "ip"].includes(asset.type);
-    let approvalAction: React.ReactNode = null;
-    if (asset.blocked && asset.block_direct && asset.block_kind === "manual" && !asset.task_read_only && !derived) {
-      approvalAction = (
-        <Button size="xs" variant="outline" disabled={changingApproval} onClick={() => setApprovalTarget(asset)}>
-          批准
-        </Button>
-      );
-    } else if (asset.blocked && asset.block_direct) {
-      approvalAction = (
-        <Button size="xs" variant="outline" disabled={changingApproval} onClick={() => void restoreAsset(asset)}>
-          {changingApproval ? <Spinner data-icon="inline-start" /> : null}
-          重新关联
-        </Button>
-      );
-    } else if (asset.blocked) {
-      approvalAction = <span className="text-muted-foreground text-xs">由父资产封禁</span>;
-    } else if (!derived && !asset.task_read_only && asset.approval_state === "pending") {
-      approvalAction = (
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={changingApproval}
-          onClick={() => void changeApproval(asset, true)}
-        >
-          批准
-        </Button>
-      );
-    } else if (!derived && !asset.task_read_only && asset.approval_state === "approved") {
-      approvalAction = (
-        <Button size="xs" variant="ghost" disabled={changingApproval} onClick={() => setApprovalTarget(asset)}>
-          撤回
-        </Button>
-      );
-    }
+    const approvalAction: React.ReactNode = null;
     return (
       <div className="flex items-center gap-1">
         {approvalAction}
@@ -568,20 +533,6 @@ export function AssetsTab({ taskId }: { taskId: string }) {
         ) : null}
       </div>
     );
-  };
-
-  const changeApproval = async (asset: Asset, approve: boolean) => {
-    setChangingApproval(true);
-    try {
-      if (approve) await api.approveTaskAssets(taskId, [asset.id]);
-      else await api.revokeTaskAssets(taskId, [asset.id]);
-      toast.success(approve ? "资产已批准" : "资产已撤回，相关 Worker 将停止");
-      refresh();
-    } catch (reason) {
-      toast.error(`审批操作失败：${String((reason as Error)?.message ?? reason)}`);
-    } finally {
-      setChangingApproval(false);
-    }
   };
 
   const restoreAsset = async (asset: Asset) => {
@@ -889,40 +840,6 @@ export function AssetsTab({ taskId }: { taskId: string }) {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog
-        open={Boolean(approvalTarget)}
-        onOpenChange={(open) => !open && !changingApproval && setApprovalTarget(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {approvalTarget?.blocked ? "批准并解除主动封禁？" : "撤回资产测试授权？"}
-            </AlertDialogTitle>
-            <AlertDialogDescription className="[overflow-wrap:anywhere]">
-              {approvalTarget?.blocked
-                ? `将批准“${assetLabel(approvalTarget)}”并解除自身主动封禁，恢复测试资格；父资产封禁不会解除。`
-                : `将撤回“${approvalTarget ? assetLabel(approvalTarget) : ""}”的测试授权。当前任务中命中该资产的运行中 Worker 会立即停止，后续测试也会被阻止。`}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={changingApproval}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              variant={approvalTarget?.blocked ? "default" : "destructive"}
-              disabled={changingApproval || !approvalTarget}
-              onClick={(event) => {
-                event.preventDefault();
-                if (approvalTarget)
-                  void changeApproval(approvalTarget, Boolean(approvalTarget.blocked)).then(() =>
-                    setApprovalTarget(null),
-                  );
-              }}
-            >
-              {changingApproval ? <Spinner data-icon="inline-start" /> : null}
-              {changingApproval ? "处理中" : approvalConfirmLabel}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

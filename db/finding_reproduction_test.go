@@ -1,91 +1,10 @@
 package db
 
 import (
-	"database/sql"
 	"encoding/json"
 	"strings"
 	"testing"
 )
-
-func TestReproductionTrafficUsesLiveTaskHostPolicy(t *testing.T) {
-	d, err := Open(testDSN(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
-	owner, err := d.CreateTaskWithOptions("reproduction scope", "", TaskCreateOptions{AssetApprovalTemplate: "explicit_targets"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.DeleteTask(owner.ID)
-	other, err := d.CreateTaskWithOptions("other reproduction scope", "", TaskCreateOptions{AssetApprovalTemplate: "explicit_targets"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.DeleteTask(other.ID)
-	a, err := d.Assets().UpsertRootDomain(UpsertRootDomainReq{Domain: "repro-owner.test", TaskID: owner.ID, AgentDiscovered: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreign, err := d.Assets().UpsertRootDomain(UpsertRootDomainReq{Domain: "repro-other.test", TaskID: other.ID, AgentDiscovered: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = d.Assets().ApproveTaskAssets(other.ID, []int64{foreign}, "test", ""); err != nil {
-		t.Fatal(err)
-	}
-	for _, state := range []string{"pending", "approved", "revoked", "blocked"} {
-		switch state {
-		case "approved":
-			err = d.Assets().ApproveTaskAssets(owner.ID, []int64{a}, "test", "")
-		case "revoked":
-			err = d.Assets().RevokeTaskAssets(owner.ID, []int64{a}, "test", "")
-		case "blocked":
-			err = d.Assets().BlockTaskAssets(owner.ID, []int64{a}, "test", "")
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, role := range []string{"planner", "worker", "mainagent"} {
-			for _, host := range []string{"repro-owner.test", "repro-other.test"} {
-				in := RecordFindingInput{TaskID: owner.ID, AccessRole: role, Reproduction: &FindingReproduction{Steps: []FindingReproductionStep{{TrafficRefs: []TrafficRef{{TrafficID: "selected"}}}}}}
-				err = d.WithEvidenceTx(t.Context(), func(tx *sql.Tx) error {
-					if err := LockFindingRecordTx(tx, in); err != nil {
-						return err
-					}
-					return validateReproductionTrafficTx(tx, in, []PreparedTrafficEvidence{{Snapshot: TrafficEvidenceSnapshot{SourceTrafficID: "selected", URL: "https://" + host + "/"}}})
-				})
-				want := host == "repro-owner.test" && (state == "approved" || (state == "pending" && role != "planner"))
-				if (err == nil) != want {
-					t.Fatalf("%s/%s/%s allowed=%v want=%v: %v", state, role, host, err == nil, want, err)
-				}
-			}
-		}
-	}
-	// Direct sources are readable only while their actual approval is valid.
-	if _, err = d.Exec(`INSERT INTO task_relations(task_id,source_task_id) VALUES($1,$2)`, owner.ID, other.ID); err != nil {
-		t.Fatal(err)
-	}
-	for _, revoked := range []bool{false, true} {
-		if revoked {
-			if err = d.Assets().RevokeTaskAssets(other.ID, []int64{foreign}, "test", ""); err != nil {
-				t.Fatal(err)
-			}
-		}
-		for _, role := range []string{"planner", "worker", "mainagent"} {
-			in := RecordFindingInput{TaskID: owner.ID, AccessRole: role, Reproduction: &FindingReproduction{Steps: []FindingReproductionStep{{TrafficRefs: []TrafficRef{{TrafficID: "source"}}}}}}
-			err = d.WithEvidenceTx(t.Context(), func(tx *sql.Tx) error {
-				if err := LockFindingRecordTx(tx, in); err != nil {
-					return err
-				}
-				return validateReproductionTrafficTx(tx, in, []PreparedTrafficEvidence{{Snapshot: TrafficEvidenceSnapshot{SourceTrafficID: "source", URL: "https://repro-other.test/"}}})
-			})
-			if (err == nil) == revoked {
-				t.Fatalf("source revoked=%v role=%s: %v", revoked, role, err)
-			}
-		}
-	}
-}
 
 const reproductionFixture = `{"entry_point":"GET https://example.test/orders","prerequisites":["测试账号A"],"steps":[{"title":"正常对照","action":"读取自己的订单","result":"返回200及账号A订单","request":"GET /orders?id=1 HTTP/1.1\r\nHost: example.test\r\n\r\n","response":"HTTP/1.1 200 OK\r\n\r\n中文🙂"},{"title":"命令验证","action":"查看已有输出","result":"已保存输出","command":"printf test","output":"test\n\u0060\u0060\u0060\n"}]}`
 

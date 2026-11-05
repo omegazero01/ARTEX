@@ -851,7 +851,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/task-templates/{id}", s.pgDeleteTaskTemplate)
 	mux.HandleFunc("GET /api/tasks/{id}", s.getTask)
 	mux.HandleFunc("PATCH /api/tasks/{id}", s.updateTaskMetadata)
-	mux.HandleFunc("PUT /api/tasks/{id}/asset-approval-template", s.updateTaskAssetTemplate)
 	mux.HandleFunc("PATCH /api/tasks/{id}/category", s.updateTaskCategory)
 	mux.HandleFunc("POST /api/tasks/control/batch", s.controlTasksBatch)
 	mux.HandleFunc("GET /api/task-archives", s.listTaskArchives)
@@ -870,10 +869,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/smart-proxy/hosts", s.getTaskSmartProxyHosts)
 	mux.HandleFunc("DELETE /api/tasks/{id}/smart-proxy/hosts", s.deleteTaskSmartProxyHost)
 	mux.HandleFunc("GET /api/tasks/{id}/intent-assets", s.taskIntentAssets)
-	mux.HandleFunc("GET /api/tasks/{id}/asset-approvals", s.listTaskAssetApprovals)
-	mux.HandleFunc("POST /api/tasks/{id}/asset-approvals/block", func(w http.ResponseWriter, r *http.Request) { s.mutateTaskAssetApprovals(w, r, "block") })
-	mux.HandleFunc("POST /api/tasks/{id}/asset-approvals/approve", func(w http.ResponseWriter, r *http.Request) { s.updateTaskAssetApprovals(w, r, true) })
-	mux.HandleFunc("POST /api/tasks/{id}/asset-approvals/revoke", func(w http.ResponseWriter, r *http.Request) { s.updateTaskAssetApprovals(w, r, false) })
 
 	mux.HandleFunc("GET /api/tasks/{id}/scope", s.taskScopeList)
 	mux.HandleFunc("POST /api/tasks/{id}/scope", s.taskScopeAdd)

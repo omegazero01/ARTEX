@@ -899,15 +899,15 @@ DROP TRIGGER IF EXISTS trg_task_asset_links_upd ON task_asset_links;
 CREATE TRIGGER trg_task_asset_links_upd BEFORE UPDATE ON task_asset_links
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Keep provenance rows synchronized when existing asset upsert paths append or
--- remove task ids. Detailed callers overwrite the generic source after upsert.
+-- Keep task-asset links synchronized when existing asset upsert paths append or
+-- remove task ids.
 CREATE OR REPLACE FUNCTION sync_task_asset_links() RETURNS trigger AS $$
 DECLARE
     agent_discovery boolean := COALESCE(current_setting('series.agent_discovery', true), '') = 'on';
     user_registration boolean := COALESCE(current_setting('series.user_asset_registration', true), '') = 'on';
 BEGIN
     INSERT INTO task_asset_links(
-        task_id, asset_id, source, source_summary, approval_state, approval_reason, source_origin
+        task_id, asset_id, source, source_summary, approval_state, approval_reason
     )
     SELECT task.id,
            NEW.id,
@@ -915,9 +915,7 @@ BEGIN
            CASE WHEN agent_discovery THEN 'Agent 通过 insert_assets 登记' ELSE '任务执行期间自动关联' END,
            CASE WHEN (agent_discovery OR user_registration) AND NEW.type NOT IN ('service','endpoint') THEN 'pending' ELSE 'approved' END,
            CASE WHEN NEW.type IN ('service','endpoint') THEN '继承父资产授权'
-                WHEN agent_discovery THEN 'Agent 发现，等待用户审批' ELSE '' END,
-           CASE WHEN agent_discovery AND task.id::text = current_setting('series.origin_task',true)
-                THEN NULLIF(current_setting('series.asset_origin',true),'')::jsonb ELSE NULL END
+                WHEN agent_discovery THEN 'Agent 发现，等待用户审批' ELSE '' END
     FROM unnest(NEW.task_ids) AS requested(task_id)
     JOIN tasks task ON task.id=requested.task_id AND task.deleted_at IS NULL
     ON CONFLICT (task_id, asset_id) DO NOTHING;
@@ -1695,3 +1693,15 @@ FOR EACH ROW EXECUTE FUNCTION notify_worker_feedback();
 
 -- Structured, immutable reproduction captured at discovery time.
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS reproduction JSONB;
+
+-- ARTEX 原版没有资产审批/阻断：资产一律视为可用。
+-- 这里覆盖前面的审批相关函数（签名不变，查询不用改），
+-- 使 pending/revoked/blocked 不再拦截工具目标。
+CREATE OR REPLACE FUNCTION task_asset_blocked(p_task_id BIGINT, p_asset_id BIGINT)
+RETURNS BOOLEAN AS $$ SELECT false; $$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION task_asset_owner_approval_state(p_task_id BIGINT,p_asset_id BIGINT)
+RETURNS TEXT AS $$ SELECT 'approved'::text; $$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION task_asset_effective_approval_state(p_task_id BIGINT, p_asset_id BIGINT)
+RETURNS TEXT AS $$ SELECT 'approved'::text; $$ LANGUAGE sql STABLE;

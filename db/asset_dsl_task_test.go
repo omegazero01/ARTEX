@@ -1,10 +1,8 @@
 package db
 
 import (
-	"fmt"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestBuildTaskDSLWhereKeepsPlaceholderOrderAndAuthorization(t *testing.T) {
@@ -34,53 +32,6 @@ func TestBuildTaskDSLWhereKeepsPlaceholderOrderAndAuthorization(t *testing.T) {
 	}
 	if !strings.Contains(blockedWhere, "task_asset_effective_approval_state($2,assets.id)='blocked'") {
 		t.Fatalf("blocked where does not use effective tombstones: %s", blockedWhere)
-	}
-}
-
-func TestTaskDSLAppliesApprovalBeforePagination(t *testing.T) {
-	d, err := Open(testDSN(t))
-	if err != nil {
-		t.Skipf("postgres unavailable (%v) - skipping", err)
-	}
-	defer d.Close()
-
-	stamp := time.Now().UnixNano()
-	task, err := d.CreateTaskWithOptions(fmt.Sprintf("task-dsl-approval-%d", stamp), "test", TaskCreateOptions{AssetApprovalTemplate: "explicit_targets"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = d.DeleteTask(task.ID) })
-	marker := fmt.Sprintf("task-dsl-page-%d", stamp)
-	approvedID, err := d.Assets().UpsertRootDomain(UpsertRootDomainReq{
-		Domain: marker + "-approved.invalid", TaskID: task.ID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pendingID, err := d.Assets().UpsertRootDomain(UpsertRootDomainReq{
-		Domain: marker + "-pending.invalid", TaskID: task.ID, AgentDiscovered: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = d.Assets().DeleteByIDs([]int64{approvedID, pendingID}) })
-
-	assets, err := d.Assets().QueryDSLByTaskApproval(task.ID, marker, "root_domain", "all", ApprovalApproved, 1, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(assets) != 1 || assets[0].ID != approvedID {
-		t.Fatalf("approved page=%+v, want only %d", assets, approvedID)
-	}
-	count, err := d.Assets().CountDSLByTaskApproval(task.ID, marker, "root_domain", "all", ApprovalApproved)
-	if err != nil || count != 1 {
-		t.Fatalf("approved count=%d err=%v, want 1", count, err)
-	}
-	for _, clause := range []string{"status==approved", "approval_state==approved", "(approval_state==pending OR approval_state==approved)"} {
-		rows, err := d.Assets().QueryDSLByTaskApproval(task.ID, marker+" AND "+clause, "root_domain", "all", ApprovalApproved, 20, 0)
-		if err != nil || len(rows) != 1 || rows[0].ID != approvedID {
-			t.Fatalf("%s: rows=%v err=%v", clause, rows, err)
-		}
 	}
 }
 
