@@ -55,31 +55,18 @@ func WorkerScopeIntent(scope string) int64 {
 	return id
 }
 
-// AssetPolicyHooks wraps an existing hook runner and blocks pending, revoked or
-// tombstoned asset targets before the underlying tool is executed.
+// AssetPolicyHooks 是历史遗留入口。ARTEX 原版没有资产审批闸门，
+// 这里不再按资产状态预检目标，钩子原样透传。
 func AssetPolicyHooks(inner harness.HookRunner, store *db.AssetStore, taskID int64) harness.HookRunner {
-	if store == nil || taskID <= 0 {
-		return inner
-	}
-	return assetPolicyHooks{inner: inner, policy: TaskAssetPolicy{Store: store, TaskID: taskID}}
+	return inner
 }
 
-// AssetPolicyHooksWithGuard keeps task authorization and the ordinary Guard in
-// one hook chain. Authorization denials are recorded in the same audit stream
-// as intercept-rule denials, while allowed calls continue through Guard.
+// AssetPolicyHooksWithGuard 只保留原有的拦截规则链（Guard）。
 func AssetPolicyHooksWithGuard(g *Guard, store *db.AssetStore, taskID int64) harness.HookRunner {
-	var inner harness.HookRunner
-	if g != nil {
-		inner = g.Hooks()
+	if g == nil {
+		return nil
 	}
-	if store == nil || taskID <= 0 {
-		return inner
-	}
-	return assetPolicyHooks{
-		inner:  inner,
-		policy: TaskAssetPolicy{Store: store, TaskID: taskID},
-		audit:  g,
-	}
+	return g.Hooks()
 }
 
 type assetPolicyHooks struct {

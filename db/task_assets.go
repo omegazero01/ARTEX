@@ -243,10 +243,8 @@ SET source=CASE WHEN task_asset_links.source IN ('manual','direct','company','ap
 	return nil
 }
 
-// ValidateTaskAssetsApproved is the strict planning/startup admission check.
-// Running Worker write-back uses ValidateWorkerAssets. Empty ids are valid for global directions. A
-// current-task link is authoritative; when none exists, a directly inherited
-// source link may authorize the asset using that source task's read-only state.
+// ValidateTaskAssetsApproved 只校验资产是否存在。ARTEX 原版没有资产审批，
+// 状态不再参与准入；保留函数名与签名，避免调用方连锁改动。
 func (s *AssetStore) ValidateTaskAssetsApproved(taskID int64, assetIDs []int64) error {
 	if taskID <= 0 || len(assetIDs) == 0 {
 		return nil
@@ -260,14 +258,8 @@ func (s *AssetStore) ValidateTaskAssetsApproved(taskID int64, assetIDs []int64) 
 		return err
 	}
 	for _, id := range ids {
-		switch states[id] {
-		case ApprovalApproved:
-		case "":
+		if _, ok := states[id]; !ok {
 			return ErrTaskAssetAssetNotFound
-		case ApprovalBlocked:
-			return fmt.Errorf("%w: asset %d 已封禁", ErrTaskAssetBlocked, id)
-		default:
-			return fmt.Errorf("%w: asset %d 状态为 %s", ErrTaskAssetNotApproved, id, states[id])
 		}
 	}
 	return nil
@@ -297,9 +289,8 @@ FROM assets WHERE id=ANY($2::bigint[])`, taskID, ids)
 	return states, rows.Err()
 }
 
-// FilterApprovedAssets removes task assets that are pending, revoked, or
-// tombstoned. It is used by agent-facing list tools so hidden assets never
-// enter Planner/Worker context even when a broad DSL query is used.
+// FilterApprovedAssets 保留函数名与调用点：ARTEX 原版没有审批，
+// 这里只剔除不存在的资产编号，其余原样返回。
 func (s *AssetStore) FilterApprovedAssets(taskID int64, assets []*Asset) ([]*Asset, error) {
 	if taskID <= 0 || len(assets) == 0 {
 		return assets, nil
@@ -314,12 +305,10 @@ func (s *AssetStore) FilterApprovedAssets(taskID int64, assets []*Asset) ([]*Ass
 	}
 	out := make([]*Asset, 0, len(assets))
 	for _, asset := range assets {
-		if states[asset.ID] == "" {
+		if _, ok := states[asset.ID]; !ok {
 			return nil, ErrTaskAssetAssetNotFound
 		}
-		if states[asset.ID] == ApprovalApproved {
-			out = append(out, asset)
-		}
+		out = append(out, asset)
 	}
 	return s.projectApprovedAssetHosts(taskID, out)
 }
@@ -410,6 +399,8 @@ FROM unnest($2::text[]) AS requested(host)`, taskID, hosts)
 }
 
 func (s *AssetStore) ValidateTaskHostsApproved(taskID int64, hosts []string) error {
+	// ARTEX 原版没有资产审批：未登记主机（state 为空）直接放行；
+	// 已登记主机仍按 pending/blocked/revoked 拦截，保留主动限制语义。
 	if taskID <= 0 || len(hosts) == 0 {
 		return nil
 	}
@@ -435,9 +426,7 @@ func (s *AssetStore) ValidateTaskHostsApproved(taskID int64, hosts []string) err
 	}
 	for _, host := range want {
 		switch states[host] {
-		case ApprovalApproved:
-		case "":
-			return ErrTaskAssetTaskNotFound
+		case "", ApprovalApproved:
 		case ApprovalBlocked:
 			return fmt.Errorf("%w: host %s 已封禁", ErrTaskAssetBlocked, host)
 		default:

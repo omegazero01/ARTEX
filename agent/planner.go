@@ -286,7 +286,7 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 任务目标：{{.Goal}}
 
 **本轮该产出几个意图（先想清楚这条）**：
-- **在已授权范围内推进**：仅在托管模式、存在满足审批及操作约束的可执行方向时，若【目标未达成】且【当前没有任何 open 或 running 意图】（意图分类计数中 open=0 且 running=0），本轮就【必须】产出至少一个向目标推进的意图——没有在跑的 work 可等、也没有在排队的方向时，产出 0 意图=任务停摆；可据下面 done/exhausted/blocked 的判断另开或续派；全部候选不可用时结束本轮，不为凑意图绕过审批。手工模式下 Planner 停用。
+- **在已授权范围内推进**：仅在托管模式、存在满足操作约束的可执行方向时，若【目标未达成】且【当前没有任何 open 或 running 意图】（意图分类计数中 open=0 且 running=0），本轮就【必须】产出至少一个向目标推进的意图——没有在跑的 work 可等、也没有在排队的方向时，产出 0 意图=任务停摆；可据下面 done/exhausted/blocked 的判断另开或续派；全部候选不可用时结束本轮，不为凑意图绕过约束。手工模式下 Planner 停用。
 - 上述条件之外，**产出 0 个意图是正常结果，但要有正当理由**（不是"少派更稳"的默认）：①**已覆盖**——你想到的方向都已被仍在 open/running 的意图处理（换措辞重复生成已存在的意图是严重错误）；②**等待依赖**——下一步依赖当前在跑 work 的产出、而它还没出来（此时硬派会让下游拿不到前置而空转，应等下次唤醒图更新后再派）。
 - 反过来：确有【未覆盖、且不依赖在跑 work】的新方向，或目标未达成且范围内仍有未测面，就该派——别把 0 意图当偷懒的默认。
 
@@ -453,8 +453,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, g *
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	ctx = intercept.WithReviewContext(ctx, taskDir, intercept.ReviewBackground{})
 	sysBody := plannerSystem(goal, p.workDir, taskDir) + plannerRetrievalRule
-	sysBody += "\n仅未知候选按需批量调用 check_target_access；已知不可用项本轮跳过，继续已授权方向。"
-	sysBody += "\n资产审批管理不自动预载，需要管理详情时才按需分页调用 list_task_assets。管理可见不等于允许测试：只有 can_schedule=true 的当前已授权资产可下发；pending/blocked/revoked 仅供解释，不要每轮查询全部状态。"
+	sysBody += "\n任务资产清单不自动预载，需要管理详情时才按需分页调用 list_task_assets。可见不等于可测：只对当前任务范围内的资产下发意图，不要每轮查询全部资产。"
 	if p.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,框定探索边界
 	}

@@ -119,7 +119,7 @@ const mainAgentDefaultTmpl = `你是一个授权渗透测试系统的"主 agent"
 
 func mainAgentSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("mainagent", mainAgentDefaultTmpl, MainVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
-	body += "\n主 Agent 下发成功后只告知下发结果并结束本轮；Worker 完成后自动回传总结，不调用 sleep、不轮询 context_get（items 内设置 output 视图）、不通过 Bash 等工具等待。context_get（items 内设置 output 视图） 仅用于用户主动查询。主 Agent 的 add_intent 新增即下发，dispatch_intents 用于执行已有待选意图。仅提供规划建议时不要创建意图。实际执行仍受封禁、撤回、任务范围、独立动作审批及并发准入约束，以工具返回的 dispatch 状态为准。手工模式下目标达成或意图执行完毕均不会自动结束任务，由用户结束；托管模式沿用原自动完成规则。"
+	body += "\n主 Agent 下发成功后只告知下发结果并结束本轮；Worker 完成后自动回传总结，不调用 sleep、不轮询 context_get（items 内设置 output 视图）、不通过 Bash 等工具等待。context_get（items 内设置 output 视图） 仅用于用户主动查询。主 Agent 的 add_intent 新增即下发，dispatch_intents 用于执行已有待选意图。仅提供规划建议时不要创建意图。实际执行仍受任务范围、任务隔离及并发准入约束，以工具返回的 dispatch 状态为准。手工模式下目标达成或意图执行完毕均不会自动结束任务，由用户结束；托管模式沿用原自动完成规则。"
 	body += "\n用户明确要求取消某条意图、停止某个 Worker 时，使用 cancel_intent(intent_id, reason)，可取消等待中、运行中或已暂停的意图。取消保留意图及已有产出，并通知 Planner；仅用户手动重新开启后可执行。只有工具成功返回 stopped 才能确认取消成功，错误或超时应如实告知。steer_work 仅用于纠偏，不保证停止执行；不要用另下新意图代替用户要求的取消。"
 	return body + "\n" + mainAssetExecutionRule + artifactSpec(workDir)
 }

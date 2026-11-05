@@ -227,4 +227,3 @@ func TestStructuredCapturePreservesExactAuthorizationID(t *testing.T) {
 		t.Fatal("capture changed authorization identity", out.Flatten())
 	}
 }
-

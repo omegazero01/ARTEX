@@ -135,7 +135,6 @@ func TestContextCapabilityBoundaries(t *testing.T) {
 	}
 }
 
-
 func TestOverviewHotProjectionMatchesCompactionGraph(t *testing.T) {
 	d := testDB(t)
 	defer d.Close()

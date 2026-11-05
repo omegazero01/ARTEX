@@ -89,8 +89,6 @@ import type {
   Task,
   TaskArchive,
   TaskArchivePage,
-  TaskAssetApproval,
-  TaskAssetApprovalMutation,
   TaskAssetMutation,
   TaskAssetScopeMutation,
   TaskCategory,
@@ -241,7 +239,6 @@ export const api = {
     get<{ tasks: Task[]; active: string }>("/tasks").then((r) => ({ tasks: arr(r.tasks), active: r.active ?? "" })),
   task: (id: string) => get<Task>(`/tasks/${encodeURIComponent(id)}`),
   createTask: (input: {
-    assetApprovalTemplate?: import("./types").AssetApprovalTemplate;
     name?: string;
     categoryId?: number;
     description: string;
@@ -264,7 +261,6 @@ export const api = {
       source_task_ids: input.sourceTaskIds ?? [],
       company_ids: input.companyIds ?? [],
       asset_ids: input.assetIds ?? [],
-      asset_approval_template: input.assetApprovalTemplate ?? "all_assets",
       timeout_seconds: input.timeoutSeconds ?? 0,
       seed_first_intent: input.seedFirstIntent ?? false,
       plan_heartbeat_seconds: input.planHeartbeatSeconds ?? 0, // 0 = 后端归一到默认 600(10min)
@@ -470,26 +466,6 @@ export const api = {
   registerTaskAssetScopes: (taskId: string, scope: CompanyScopeRule[]) =>
     post<TaskAssetScopeMutation>(`/tasks/${taskId}/assets`, { scope }),
   detachTaskAsset: (taskId: string, assetId: number) => del<{ detached: number }>(`/tasks/${taskId}/assets/${assetId}`),
-  taskAssetApprovals: (taskId: string) =>
-    get<{ items: TaskAssetApproval[] }>(`/tasks/${taskId}/asset-approvals?group_by=host`).then((r) => r?.items ?? []),
-  updateTaskAssetTemplate: (taskId: string, value: import("./types").AssetApprovalTemplate) =>
-    put(`/tasks/${taskId}/asset-approval-template`, { asset_approval_template: value }),
-  mutateTaskAssetGroups: (
-    taskId: string,
-    operation: "approve" | "revoke" | "block",
-    groupKeys: string[],
-    reason = "",
-  ) =>
-    post<TaskAssetApprovalMutation>(`/tasks/${taskId}/asset-approvals/${operation}`, {
-      group_keys: groupKeys,
-      reason,
-    }),
-  approveTaskAssets: (taskId: string, assetIds: number[], reason = "") =>
-    post<TaskAssetApprovalMutation>(`/tasks/${taskId}/asset-approvals/approve`, { asset_ids: assetIds, reason }),
-  revokeTaskAssets: (taskId: string, assetIds: number[], reason = "") =>
-    post<TaskAssetApprovalMutation>(`/tasks/${taskId}/asset-approvals/revoke`, { asset_ids: assetIds, reason }),
-  blockTaskAssets: (taskId: string, assetIds: number[], reason = "") =>
-    post<TaskAssetApprovalMutation>(`/tasks/${taskId}/asset-approvals/block`, { asset_ids: assetIds, reason }),
   taskIntentAssets: (taskId: string, before = 0, limit = 300, signal?: AbortSignal) => {
     const query = new URLSearchParams({ before: String(Math.max(0, before)), limit: String(limit) });
     return get<{ assets: IntentAsset[] }>(`/tasks/${taskId}/intent-assets?${query}`, { signal }).then((r) =>

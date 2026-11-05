@@ -47,7 +47,6 @@ import { SessionsTab } from "./_tabs/sessions-tab";
 
 // Secondary tabs (graphs and tables) are not on the session
 // startup path. Load their code only when the corresponding tab mounts.
-const AssetApprovalsTab = dynamic(() => import("./_tabs/asset-approvals-tab").then((m) => m.AssetApprovalsTab));
 const BroadcastTab = dynamic(() => import("./_tabs/broadcast-tab").then((m) => m.BroadcastTab));
 const AssetsTab = dynamic(() => import("./_tabs/assets-tab").then((m) => m.AssetsTab));
 const CoverageGraphTab = dynamic(() => import("./_tabs/coverage-graph-tab").then((m) => m.CoverageGraphTab));
@@ -64,7 +63,6 @@ const TABS = [
   { value: "broadcast", label: "播报板" },
   { value: "findings", label: "发现" },
   { value: "assets", label: "测试资产" },
-  { value: "asset-approvals", label: "资产审批" },
   { value: "coverage", label: "资产覆盖图" },
   { value: "intercept", label: "拦截审批" },
   { value: "smart-proxy", label: "智能代理" },
@@ -250,7 +248,7 @@ function TaskDetailInner() {
   activeTab.current = tab;
   const beginRead = React.useCallback(
     (category: NotificationCategory) => {
-      const expected = { findings: "findings", assets: "asset-approvals", intercepts: "intercept" }[category];
+      const expected = { findings: "findings", assets: "assets", intercepts: "intercept" }[category];
       const wasVisible = document.visibilityState === "visible" && activeTab.current === expected;
       const done = capture(id, category);
       return () => {
@@ -491,7 +489,6 @@ function TaskDetailInner() {
               <TabsTrigger key={t.value} value={t.value}>
                 {t.label}
                 {t.value === "findings" && <TaskUnreadBadge count={unread[id]?.findings} label="新漏洞" />}
-                {t.value === "asset-approvals" && <TaskUnreadBadge count={unread[id]?.assets} label="新待审批资产" />}
                 {t.value === "intercept" && <TaskUnreadBadge count={unread[id]?.intercepts} label="新拦截审批" />}
               </TabsTrigger>
             ))}
@@ -519,9 +516,6 @@ function TaskDetailInner() {
           </TabsContent>
           <TabsContent value="assets" className="mt-0">
             <AssetsTab taskId={id} />
-          </TabsContent>
-          <TabsContent value="asset-approvals" className="mt-0">
-            <AssetApprovalsTab taskId={id} />
           </TabsContent>
           <TabsContent value="coverage" className="mt-0">
             <CoverageGraphTab taskId={id} coverageEnabled={task?.coverage_enabled !== false} />

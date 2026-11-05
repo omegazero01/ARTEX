@@ -20,8 +20,8 @@ func TestPlannerAssetPromptUsesActualBindings(t *testing.T) {
 		if (len(tools) > 0) != strings.Contains(text, "本轮已提供 asset_search") || (len(tools) < 2) != strings.Contains(text, "本轮未提供 asset_get") {
 			t.Fatal(text)
 		}
-		if !strings.Contains(text, "未审批、封禁、撤回或越界") {
-			t.Fatal("approval boundary missing", text)
+		if !strings.Contains(text, "超出任务范围") {
+			t.Fatal("scope boundary missing", text)
 		}
 	}
 }

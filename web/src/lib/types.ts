@@ -7,6 +7,7 @@ export type EngineMode = "exploring" | "paused" | "stalled" | "idle";
 
 export interface Task {
   execution_mode?: "managed" | "manual";
+  /** 历史字段：审批已移除，仅 mock 数据仍携带。 */
   asset_approval_template?: AssetApprovalTemplate;
   id: string;
   name?: string; // 可选任务名称;空/缺省=未命名,展示时回退到描述
@@ -274,18 +275,7 @@ export interface Asset {
   block_reason?: string;
 }
 
-export interface AssetOrigin {
-  task_id: number;
-  session: string;
-  tool_use_id: string;
-  activity_id: number;
-  asset_ids: number[];
-  created_at: string;
-  available: boolean;
-}
-
 export interface TaskAssetApproval {
-  origins?: AssetOrigin[];
   group_key?: string;
   asset_ids?: number[];
   record_types?: string[];

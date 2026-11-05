@@ -14,7 +14,6 @@ import {
   normalizeCompanyScopeValue,
 } from "../company-scope";
 import type {
-  AssetOrigin,
   Activity,
   ArchiveBatchItem,
   Asset,
@@ -180,7 +179,6 @@ type MockTaskAssetSource = Pick<
 >;
 const mockTaskAssetSources = new Map<string, MockTaskAssetSource>();
 // Two explicit discovery fixtures exercise sorting and source navigation.
-const mockOrigins = new Map<number, AssetOrigin>();
 for (const [index, domain] of ["new-api.acme.com", "new-admin.acme.com"].entries()) {
   const id = Math.max(...mockAssets.map((a) => a.id)) + 1;
   const seq = Math.max(...mockActivity.map((a) => a.seq)) + 1;
@@ -216,15 +214,6 @@ for (const [index, domain] of ["new-api.acme.com", "new-admin.acme.com"].entries
       detail: JSON.stringify({ results: [{ id, type: "subdomain", approval_state: "pending" }] }),
     },
   );
-  mockOrigins.set(id, {
-    task_id: 1,
-    session: "main:0",
-    tool_use_id: call,
-    activity_id: seq,
-    asset_ids: [id],
-    created_at: ts,
-    available: true,
-  });
 }
 type MockTaskAssetBlock = {
   block_kind?: "manual" | "deleted";
@@ -774,7 +763,6 @@ function mockTaskAssetApprovals(taskID: string): TaskAssetApproval[] {
         source: source?.task_source ?? "legacy",
         source_summary: source?.task_source_summary ?? "由任务资产关联迁移",
         source_node_id: source?.task_source_node_id,
-        origins: mockOrigins.has(asset.id) ? [mockOrigins.get(asset.id)!] : undefined,
         source_task_id: owner.numericTaskID,
         inherited: owner.inherited,
         read_only: owner.inherited,
@@ -831,7 +819,6 @@ function mockApprovalGroups(taskID: string): TaskAssetApproval[] {
     groups.set(groupKey, {
       ...(old && rank(old) >= rank(row) ? old : row),
       created_at: old && Date.parse(old.created_at) < Date.parse(row.created_at) ? old.created_at : row.created_at,
-      origins: [...new Map([...(old?.origins ?? []), ...(row.origins ?? [])].map((o) => [o.activity_id, o])).values()],
       group_key: groupKey,
       asset_ids: ids,
       record_types: [...new Set([...(old?.record_types ?? []), ...(asset?.record_type ? [asset.record_type] : [])])],
@@ -2412,9 +2399,6 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     const offset = Number(q.get("offset") ?? 0);
     const page = list.slice(offset, offset + limit).map((asset) => (taskID ? mockAssetForTask(taskID, asset) : asset));
     return { count: page.length, total: list.length, assets: page };
-  }
-  if (seg[0] === "tasks" && seg[2] === "asset-approvals" && seg.length === 3 && m === "GET") {
-    return { items: q.get("group_by") === "host" ? mockApprovalGroups(seg[1]) : mockTaskAssetApprovals(seg[1]) };
   }
   if (seg[0] === "tasks" && seg[2] === "asset-approval-template" && seg.length === 3 && m === "PUT") {
     const task = mockTasks.find((t) => t.id === seg[1]);

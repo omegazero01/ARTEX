@@ -293,7 +293,7 @@ func (t *ToolSet) StripCoverageParams(tools []actool.CoreTool) []actool.CoreTool
 				}
 			}
 			schema["required"] = []string{"dsl"}
-			desc = "检索当前角色授权可见的资产摘要，必须提供非空dsl；本任务已关闭覆盖度，不提供未测试筛选。默认页长见limit.default，最多50条；保持筛选条件用next_offset续页。任务范围及资产审批过滤仍生效。"
+			desc = "检索当前角色授权可见的资产摘要，必须提供非空dsl；本任务已关闭覆盖度，不提供未测试筛选。默认页长见limit.default，最多50条；保持筛选条件用next_offset续页。任务范围过滤仍生效。"
 		} else if props, ok := nestedMap(schema, "properties", "assets", "items", "properties"); ok {
 			delete(props, "related")
 		}
@@ -733,7 +733,7 @@ func (t *ToolSet) graphOverviewDataContext(ctx context.Context) map[string]any {
 		if summary, err := t.as.QueryTaskAssetView(t.taskID, db.TaskAssetViewQuery{Status: "all", SummaryOnly: true}); err == nil {
 			out["asset_approval_counts"] = summary.Counts
 		} else {
-			out["asset_approval_error"] = "审批计数暂不可用：" + err.Error()
+			out["asset_approval_error"] = "资产范围计数暂不可用：" + err.Error()
 		}
 	}
 	return out
@@ -1718,7 +1718,7 @@ func compactFact(n *db.Node) map[string]any {
 }
 
 func (t *ToolSet) nodeDetail() actool.CoreTool {
-	return t.readExpTool("node_detail", "按 id 取本任务或直接关联任务的【探索图节点】完整内容。继承节点带 source_task_id/inherited=true 且只读。仅限 list_facts/list_findings/graph_overview 返回的探索节点 id；资产请用 list_assets。未知授权的节点先批量 check_target_access，已复核可用的直接读取。",
+	return t.readExpTool("node_detail", "按 id 取本任务或直接关联任务的【探索图节点】完整内容。继承节点带 source_task_id/inherited=true 且只读。仅限 list_facts/list_findings/graph_overview 返回的探索节点 id；资产请用 list_assets。节点不可读时按返回原因处理。",
 		obj(map[string]any{"id": idp("探索图节点 id(非资产 id)"), "field": str("延期字段的 JSON Pointer，默认整个 payload"), "index": intp("集合 next_index 续页"), "offset": intp("文本 next_offset 续读"), "max_chars": intp("默认8000，最大24000")}, "id"),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			if t.ts == nil {
@@ -1743,7 +1743,7 @@ func (t *ToolSet) nodeDetail() actool.CoreTool {
 			if t.as != nil && t.taskID > 0 && !t.workerExecution {
 				access, err := queryTargetAccess(t.as, t.taskID, targetAccessQuery{NodeIDs: []int64{id}})
 				if err != nil {
-					return actool.Errorf("审批查询失败: " + err.Error()), nil
+					return actool.Errorf("资产查询失败: " + err.Error()), nil
 				}
 				if targetDenied(access) {
 					return accessErrorResult(&targetAccessError{access}, access)
@@ -1761,7 +1761,7 @@ func (t *ToolSet) nodeDetail() actool.CoreTool {
 				return actool.Errorf(authErr.Error()), nil
 			}
 			if !authorized {
-				return actool.Errorf("该节点关联的任务资产未获授权或已被封禁"), nil
+				return actool.Errorf("该节点关联的任务资产不在当前任务范围内或不可用"), nil
 			}
 			projection, err := projectDetail(n.Payload, a.detailWindow, a.Field, a.Index)
 			if err != nil {
@@ -1822,7 +1822,7 @@ func (t *ToolSet) addOneIntentResultWithMode(ctx context.Context, it intentItem,
 	if t.as != nil && t.taskID > 0 {
 		access, err := queryTargetAccess(t.as, t.taskID, targetAccessQuery{AssetIDs: pidList(it.AssetIDs), NodeIDs: pidList(it.ParentIDs)})
 		if err != nil {
-			return 0, false, fmt.Errorf("审批查询失败: %w", err)
+			return 0, false, fmt.Errorf("资产查询失败: %w", err)
 		}
 		if targetDenied(access) {
 			return 0, false, &targetAccessError{access}
@@ -1870,7 +1870,7 @@ func (t *ToolSet) addOneIntentResultWithMode(ctx context.Context, it intentItem,
 			return 0, false, authErr
 		}
 		if !authorized {
-			return 0, false, fmt.Errorf("parent_id %d 关联的任务资产未获授权或已被封禁", pidv)
+			return 0, false, fmt.Errorf("parent_id %d 关联的任务资产不在当前任务范围内或不可用", pidv)
 		}
 		parentNodes = append(parentNodes, n)
 	}
@@ -1959,7 +1959,7 @@ func intentInputSchema() map[string]any {
 
 func (t *ToolSet) addIntent() actool.CoreTool {
 	return submissionTool{writeTool("add_intent", "生成【探索方向】写入 frontier，并连入探索链路。意图是开放的探索方向，不是固定类型——用 summary 一句话自由描述要探索/验证/利用什么。\n"+
-		"主 Agent 成功下发后结束本轮，Worker 自动回传总结，不轮询等待。Planner 信息足够时直接提交意图，无需先查询意图或资产；仅在信息不足时按需检索，结合已知方向及数据库去重避免重复。Planner 对未审批候选本轮跳过；主 Agent 可明确下发待审批资产方向，但封禁和撤回仍拒绝。未知候选先批量 check_target_access。★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（最多 4 条，比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors；已存在的活跃同方向见 duplicates）。单条则省略 intents 直接给顶层 summary。",
+		"主 Agent 成功下发后结束本轮，Worker 自动回传总结，不轮询等待。Planner 信息足够时直接提交意图，无需先查询意图或资产；仅在信息不足时按需检索，结合已知方向及数据库去重避免重复。删除与任务隔离的限制仍然拒绝。★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（最多 4 条，比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors；已存在的活跃同方向见 duplicates）。单条则省略 intents 直接给顶层 summary。",
 		intentInputSchema(),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			t := t
@@ -2121,7 +2121,7 @@ func (t *ToolSet) proveGoal() actool.CoreTool {
 				return actool.Errorf("evidence_id 必须是本任务或直接关联任务的事实/漏洞节点"), nil
 			}
 			if !t.nodeAuthorized(evidenceNode) {
-				return actool.Errorf("evidence_id 关联的任务资产未获授权或已被封禁"), nil
+				return actool.Errorf("evidence_id 关联的任务资产不在当前任务范围内或不可用"), nil
 			}
 			_ = t.ts.Link(ev, db.RelProves, goal)
 			_ = t.ts.SetNodeState(goal, "met")
@@ -2222,7 +2222,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 				return actool.Errorf("intent_id 必须是本任务的意图（关联任务意图只读）"), nil
 			}
 			if !t.nodeAuthorized(node) {
-				return actool.Errorf("intent_id 关联的任务资产未获授权或已被封禁"), nil
+				return actool.Errorf("intent_id 关联的任务资产不在当前任务范围内或不可用"), nil
 			}
 		}
 		if t.taskID > 0 {
@@ -2257,7 +2257,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 					return err
 				}
 				if !ok {
-					return fmt.Errorf("intent_id 关联的任务资产未获授权或已被封禁")
+					return fmt.Errorf("intent_id 关联的任务资产不在当前任务范围内或不可用")
 				}
 			}
 			return nil
@@ -2353,7 +2353,7 @@ func (t *ToolSet) recordOneFact(it factItem, defaultIntent int64) (int64, error)
 			return 0, fmt.Errorf("intent_id 必须是本任务的意图（关联任务意图只读）")
 		}
 		if !t.nodeAuthorized(node) {
-			return 0, fmt.Errorf("intent_id 关联的任务资产未获授权或已被封禁")
+			return 0, fmt.Errorf("intent_id 关联的任务资产不在当前任务范围内或不可用")
 		}
 	}
 	anchors := pidList(it.AssetIDs)
@@ -2781,7 +2781,7 @@ func (t *ToolSet) steerWorkTool() actool.CoreTool {
 				return actool.Errorf("intent_id 必须是本任务的意图（关联任务意图只读）"), nil
 			}
 			if !t.nodeAuthorized(node) {
-				return actool.Errorf("该意图关联的任务资产未获授权或已被封禁"), nil
+				return actool.Errorf("该意图关联的任务资产不在当前任务范围内或不可用"), nil
 			}
 			if strings.TrimSpace(a.Message) == "" {
 				return actool.Errorf("message 必填"), nil
@@ -2826,7 +2826,7 @@ func (t *ToolSet) getWorkerOutput() actool.CoreTool {
 				return actool.Errorf(authErr.Error()), nil
 			}
 			if !authorized {
-				return actool.Errorf("该 work 关联的任务资产未获授权或已被封禁"), nil
+				return actool.Errorf("该 work 关联的任务资产不在当前任务范围内或不可用"), nil
 			}
 			pick, err := t.ts.LatestWorkerOutput(ctx, a.IntentID, a.Offset, a.MaxChars)
 			if err != nil {
@@ -2926,7 +2926,7 @@ func (t *ToolSet) getWorkerTrace() actool.CoreTool {
 				return actool.Errorf(authErr.Error()), nil
 			}
 			if !authorized {
-				return actool.Errorf("该 work 关联的任务资产未获授权或已被封禁"), nil
+				return actool.Errorf("该 work 关联的任务资产不在当前任务范围内或不可用"), nil
 			}
 			out := map[string]any{"intent_id": in.IntentID, "state": n.State}
 			if n.Inherited {
@@ -3099,7 +3099,7 @@ func (t *ToolSet) listWorkerTraces() actool.CoreTool {
 // PlannerTools is the read + intent-generation + goal-judgement tool set.
 func (t *ToolSet) PlannerTools() []actool.CoreTool {
 	return []actool.CoreTool{
-		t.listTaskAssets(), t.checkTargetAccess(),
+		t.listTaskAssets(),
 		t.markHostProxy(), t.checkHostProxy(),
 		t.graphOverview(), t.contextSearch(), t.contextGet(),
 		t.addIntent(), t.proveGoal(), t.killWorkTool(), t.steerWorkTool(), t.addFinding(),

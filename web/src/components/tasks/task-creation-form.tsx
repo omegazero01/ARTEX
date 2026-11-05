@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation";
 import { ArrowUp, ChevronRightIcon, PaperclipIcon, PlusIcon, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { AssetApprovalTemplateField } from "@/components/asset-approval-template";
 import { StatusBadge } from "@/components/status-badge";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { TaskTemplateControls } from "@/components/task-template-controls";
@@ -36,7 +35,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type {
   Asset,
-  AssetApprovalTemplate,
   ChatAttachment,
   Company,
   LLMProfile,
@@ -467,7 +465,6 @@ export function TaskCreationForm() {
   const [description, setDescription] = React.useState("");
   const [goal, setGoal] = React.useState("");
   const [selectedTemplateID, setSelectedTemplateID] = React.useState<number | null>(null);
-  const [assetApprovalTemplate, setAssetApprovalTemplate] = React.useState<AssetApprovalTemplate>("all_assets");
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [companies, setCompanies] = React.useState<Company[]>([]);
   const [sourceTaskIDs, setSourceTaskIDs] = React.useState<string[]>([]);
@@ -557,7 +554,6 @@ export function TaskCreationForm() {
         sourceTaskIds: sourceTaskIDs,
         companyIds: companyIDs,
         assetIds: assetIDs,
-        assetApprovalTemplate,
         timeoutSeconds: timeoutSec,
         seedFirstIntent,
         planHeartbeatSeconds: heartbeatSec,
@@ -664,11 +660,6 @@ export function TaskCreationForm() {
               />
               <FieldDescription>可选，单个分类；用于任务列表筛选和归档，不影响 Agent 执行。</FieldDescription>
             </Field>
-            <AssetApprovalTemplateField
-              value={assetApprovalTemplate}
-              onChange={setAssetApprovalTemplate}
-              disabled={creating}
-            />
             <div className="grid gap-2">
               <Label htmlFor="goal">目标</Label>
               <Textarea
