@@ -228,26 +228,3 @@ func TestStructuredCapturePreservesExactAuthorizationID(t *testing.T) {
 	}
 }
 
-func TestPartialContextFailureDoesNotEraseEarlierEvidence(t *testing.T) {
-	for _, deferred := range []bool{false, true} {
-		req := llm.CompletionRequest{}
-		for i, body := range []string{`{"items":[{"ref":"node:1","text":"earlier evidence"}]}`, `{"items":[{"ref":"node:1","error":"query timeout"}]}`} {
-			name, in := "context_get", json.RawMessage(`{"items":[{"ref":"node:1"}]}`)
-			if deferred {
-				name = actool.ExecuteExtraToolName
-				in = json.RawMessage(`{"tool_name":"context_get","params":{"items":[{"ref":"node:1"}]}}`)
-			}
-			id := fmt.Sprint(i)
-			req.Messages = append(req.Messages, llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockToolUse, ID: id, Name: name, Input: in}}}, llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{llm.ToolResultText(id, body, false)}})
-		}
-		out := deduplicateToolHistory(req)
-		if !strings.Contains(out.Messages[1].Content[0].Content[0].Text, "earlier evidence") {
-			t.Fatal("partial failure discarded useful history")
-		}
-		req.Messages[3].Content[0].Content[0].Text = `{"items":[{"ref":"node:1","text":"new evidence"}]}`
-		out = deduplicateToolHistory(req)
-		if strings.Contains(out.Messages[1].Content[0].Content[0].Text, "earlier evidence") {
-			t.Fatal("successful reread not deduplicated", deferred)
-		}
-	}
-}

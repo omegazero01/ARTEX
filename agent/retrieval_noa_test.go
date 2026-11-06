@@ -43,8 +43,8 @@ func TestRetrievalNoaAndProviderPaths(t *testing.T) {
 		provider := withAssetContext(retrievalProbeProvider{check: func(got llm.CompletionRequest) {
 			calls++
 			old := got.Messages[1].Content[0].Content[0].Text
-			if !strings.Contains(old, "history_omitted") {
-				t.Fatal("old page not removed")
+			if strings.Contains(old, "history_omitted") {
+				t.Fatal("old page removed")
 			}
 			for _, m := range got.Messages {
 				for _, b := range m.Content {

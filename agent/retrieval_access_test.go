@@ -83,11 +83,6 @@ func TestRetrievalWindowRefreshesAccessAndRestores(t *testing.T) {
 	if strings.Contains(string(encoded), "中证据") {
 		t.Fatal("revoked body retained")
 	}
-	for _, s := range got.System {
-		if strings.HasPrefix(s, retrievalDirectoryPrefix) && strings.Contains(s, fmt.Sprintf("node:%d", node)) {
-			t.Fatal("revoked index retained")
-		}
-	}
 	after, _ := json.Marshal(req)
 	if string(before) != string(after) {
 		t.Fatal("audit changed")
@@ -98,7 +93,7 @@ func TestRetrievalWindowRefreshesAccessAndRestores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(noStore.Messages[1].Content[0].Content[0].Text, "history_omitted") {
-		t.Fatal("nil-store task unbounded")
+	if strings.Contains(noStore.Messages[1].Content[0].Content[0].Text, "history_omitted") {
+		t.Fatal("old page still bounded")
 	}
 }

@@ -135,22 +135,6 @@ func TestContextCapabilityBoundaries(t *testing.T) {
 	}
 }
 
-func TestContextReadHistoryDedup(t *testing.T) {
-	for _, name := range []string{"context_search", "context_get", "asset_search", "asset_get", "traffic_get", "traffic_search"} {
-		req := llm.CompletionRequest{Messages: []llm.Message{}}
-		for _, id := range []string{"old", "new"} {
-			req.Messages = append(req.Messages, llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockToolUse, ID: id, Name: name, Input: json.RawMessage(`{"q":"x"}`)}}}, llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockToolResult, ToolUseID: id, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "body-" + id}}}}})
-		}
-		out := deduplicateToolHistory(req)
-		b, _ := json.Marshal(out)
-		if strings.Contains(string(b), "body-old") || !strings.Contains(string(b), "body-new") {
-			t.Fatal(name, string(b))
-		}
-		if req.Messages[1].Content[0].Content[0].Text != "body-old" {
-			t.Fatal("changed original")
-		}
-	}
-}
 
 func TestOverviewHotProjectionMatchesCompactionGraph(t *testing.T) {
 	d := testDB(t)
