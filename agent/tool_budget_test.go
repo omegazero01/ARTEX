@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/Autumn-27/norma/llm"
 )
 
 func TestToolDetailUnicodeAndCollections(t *testing.T) {
@@ -66,36 +64,6 @@ func TestToolDetailUnicodeAndCollections(t *testing.T) {
 	}
 }
 
-func TestNormalizedToolHistoryKeepsPairingAndOriginal(t *testing.T) {
-	query := func(id, raw, name string) llm.ContentBlock {
-		return llm.ContentBlock{Type: llm.BlockToolUse, ID: id, Name: name, Input: json.RawMessage(raw)}
-	}
-	result := func(id, text string) llm.ContentBlock {
-		return llm.ContentBlock{Type: llm.BlockToolResult, ToolUseID: id, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: text}}}
-	}
-	req := llm.CompletionRequest{Messages: []llm.Message{{Content: []llm.ContentBlock{
-		query("a", `{}`, "list_facts"), result("a", "old"), query("b", `{"q":"","limit":20}`, "list_facts"), result("b", "new"),
-		query("c", `{"before":7}`, "list_facts"), result("c", "page two"),
-		query("d", `{"id":7}`, "expand_digest"), result("d", "write one"), query("e", `{"id":7}`, "expand_digest"), result("e", "write two"),
-	}}}}
-	before, _ := json.Marshal(req)
-	out := deduplicateToolHistory(req)
-	after, _ := json.Marshal(req)
-	if string(before) != string(after) {
-		t.Fatal("mutated transcript")
-	}
-	blocks := out.Messages[0].Content
-	if blocks[1].Content[0].Text == "old" || blocks[1].ToolUseID != "a" {
-		t.Fatal("dedup/pairing failed")
-	}
-	for i, want := range map[int]string{3: "new", 5: "page two", 7: "write one", 9: "write two"} {
-		if blocks[i].Content[0].Text != want {
-			t.Fatalf("incorrectly removed %s", want)
-		}
-	}
-	t.Logf("history before=%d bytes after=%d bytes (tiny fixture is for semantics, not savings)", len(before), len(after))
-}
-
 func TestToolInputRejectsInvalidShapes(t *testing.T) {
 	for _, input := range []string{`[]`, `null`, `{"limit":"20"}`, `{"unknown":1}`, `{} {}`} {
 		var args struct {
@@ -127,18 +95,5 @@ func TestToolDefinitionAndHistorySizes(t *testing.T) {
 		total += len(data)
 		t.Logf("definition %s=%dB", tool.Name(), len(data))
 	}
-	blocks := []llm.ContentBlock{}
-	for _, id := range []string{"one", "two", "three"} {
-		blocks = append(blocks,
-			llm.ContentBlock{Type: llm.BlockToolUse, ID: id, Name: "list_facts", Input: json.RawMessage(`{}`)},
-			llm.ContentBlock{Type: llm.BlockToolResult, ToolUseID: id, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: strings.Repeat("重复事实摘要", 2000)}}},
-		)
-	}
-	req := llm.CompletionRequest{Messages: []llm.Message{{Content: blocks}}}
-	before, _ := json.Marshal(req)
-	after, _ := json.Marshal(deduplicateToolHistory(req))
-	if len(after) >= len(before) {
-		t.Fatal("duplicate history not reduced")
-	}
-	t.Logf("definitions_total=%dB duplicate_history_before=%dB after=%dB; byte counts are not exact Tokens", total, len(before), len(after))
+	t.Logf("definitions_total=%dB; byte counts are not exact Tokens", total)
 }

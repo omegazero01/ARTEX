@@ -407,6 +407,15 @@ func idp(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
 }
 
+// retrievalTool 标记检索类工具，用于执行耗时日志（原检索历史上限已删除）。
+func retrievalTool(name string) bool {
+	switch name {
+	case "context_search", "context_get", "asset_search", "asset_get", "traffic_search", "traffic_get", "graph_overview":
+		return true
+	}
+	return false
+}
+
 func readTool(name, desc string, schema map[string]any, run func(context.Context, json.RawMessage) (actool.Result, error)) actool.CoreTool {
 	return actool.Build(actool.Spec{
 		Name: name, Description: desc, Schema: schema,

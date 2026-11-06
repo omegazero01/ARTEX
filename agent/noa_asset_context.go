@@ -49,7 +49,6 @@ func (p assetContextProvider) filter(ctx context.Context, req llm.CompletionRequ
 			b.Content[r.c].Text = noaadapter.StripRefTag(b.Content[r.c].Text)
 		}
 	}
-	req = clearRetrievalDirectory(req)
 	var out llm.CompletionRequest
 	var err error
 	if p.assets == nil {
@@ -61,7 +60,6 @@ func (p assetContextProvider) filter(ctx context.Context, req llm.CompletionRequ
 		return out, err
 	}
 	out = refreshPlannerStateHistory(ctx, out)
-	out = boundRetrievalHistory(deduplicateToolHistory(out))
 	out = refreshWorkerTodos(ctx, out)
 	for _, r := range refs {
 		b := &out.Messages[r.m].Content[r.b]

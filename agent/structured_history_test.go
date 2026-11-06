@@ -21,7 +21,7 @@ func TestUnverifiableHistoryPreservesUsableContextAndDiagnostics(t *testing.T) {
 					llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{llm.ToolResultText(id, body, false)}})
 			}
 			before, _ := json.Marshal(history)
-			out := deduplicateToolHistory(redactUnverifiableStructuredHistory(llm.CompletionRequest{Messages: history}))
+			out := redactUnverifiableStructuredHistory(llm.CompletionRequest{Messages: history})
 			encoded, _ := json.Marshal(out.Messages)
 			if strings.Contains(string(encoded), "DROP_BROKEN") || !strings.Contains(string(encoded), "KEEP_VALID") {
 				t.Fatalf("context incorrectly replaced: %s", encoded)
