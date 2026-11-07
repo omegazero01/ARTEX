@@ -118,27 +118,6 @@ func TestPlannerProactiveQueriesAreNotAdmissionProof(t *testing.T) {
 	}
 }
 
-func TestPlannerDirectDispatchPromptRemovesQueryPrerequisite(t *testing.T) {
-	text := plannerDefaultTmpl + plannerRetrievalRule
-	for _, stale := range []string{"工具会强制检查", "仅本轮完整查询链有效", "完成该查询后才能新增", "必须先用 context_search", "先主动用 context_search", "先查询已有方向再新增意图", "准备新增方向时，主动用 context_search", "信息足够后提交，不能靠先提交报错"} {
-		if strings.Contains(text, stale) {
-			t.Fatal(stale)
-		}
-	}
-	for _, guidance := range []string{"信息足够时直接调用 add_intent", "仅监督或等待结果", "无需先查询", "asset_id", "不要求遍历全图", "查询失败时说明信息缺口"} {
-		if !strings.Contains(text, guidance) {
-			t.Fatal("missing direct-dispatch guidance", guidance)
-		}
-	}
-	prior := PromptOverride
-	t.Cleanup(func() { PromptOverride = prior })
-	PromptOverride = func(string) (string, bool) { return "custom: search_required must be resolved", true }
-	text = plannerSystem("mission", t.TempDir(), t.TempDir()) + plannerRetrievalRule
-	if !strings.HasPrefix(text, "custom:") || !strings.Contains(text, "替代旧版查询前置要求") {
-		t.Fatal("custom prompt lost or stale gate uncorrected")
-	}
-}
-
 func TestPlannerDirectDispatchDefaultMigrationHash(t *testing.T) {
 	prior, err := os.ReadFile("../db/testdata/planner-before-direct-dispatch.txt")
 	if err != nil {

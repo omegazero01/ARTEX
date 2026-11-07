@@ -655,22 +655,11 @@ func (t *ToolSet) listAssets() actool.CoreTool {
 				if a.Detail {
 					data := assetFieldGroups(asset, a.Fields)
 					window := w
-					budget := (toolListBudget - 512) / max(1, len(assets))
-					for {
-						projection, err := projectDetail(data, window, a.Field, a.Index)
-						if err != nil {
-							return actool.Errorf(err.Error()), nil
-						}
-						row["details"] = projection
-						encoded, _ := json.Marshal(row)
-						if len([]rune(string(encoded))) <= budget {
-							break
-						}
-						if window.MaxChars <= 1 {
-							return actool.Errorf("详情元数据超出预算，请减少资产数量或指定更具体的 field"), nil
-						}
-						window.MaxChars = max(1, window.MaxChars/2)
+					projection, err := projectDetail(data, window, a.Field, a.Index)
+					if err != nil {
+						return actool.Errorf(err.Error()), nil
 					}
+					row["details"] = projection
 				}
 				rows = append(rows, row)
 			}

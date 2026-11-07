@@ -520,8 +520,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// The run-wide intent is not the current tool action. Do not forward it or
 	// inherit a parent run's background into the action reviewer.
 	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
-	overview := tsx.workerLaunchContext(ctx, intent.ID)
-	overview += workerMemoryPreview(w.mem, nodeSummary(intent))
+	overview := workerMemoryPreview(w.mem, nodeSummary(intent))
 	runProxyAddr := TaskProxyAddr(w.proxyAddr, w.proxyCACert, taskID, guard.AssetSkipScope(ctx))
 	promptCACert := ""
 	if w.trafficRecording {
