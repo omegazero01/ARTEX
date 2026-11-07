@@ -227,11 +227,6 @@ func (p assetContextProvider) filterPlain(ctx context.Context, req llm.Completio
 	main := ri.AgentKey == "mainagent" && ri.TaskID == p.taskID && p.taskID > 0 && ri.IntentID == 0
 	worker := ri.AgentKey == "worker" && ri.TaskID == p.taskID && ri.IntentID > 0
 	req = redactUnverifiableStructuredHistory(req)
-	var refreshErr error
-	req, refreshErr = p.refreshPlannerBootstrap(ctx, req)
-	if refreshErr != nil {
-		return req, refreshErr
-	}
 	if ri.TaskID == p.taskID && (ri.AgentKey == "planner" || ri.AgentKey == "mainagent") && main {
 		req.System = append(append([]string(nil), req.System...), mainAssetExecutionRule)
 	}

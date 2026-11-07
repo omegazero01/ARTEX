@@ -239,33 +239,6 @@ func (t *ToolSet) expandDigest() actool.CoreTool {
 				out["inherited"] = true
 				out["source_task_id"] = srcTaskID
 			}
-			window := in.detailWindow
-			for {
-				encoded, err := json.Marshal(out)
-				if err != nil {
-					return actool.Errorf(err.Error()), nil
-				}
-				if len([]rune(string(encoded))) <= toolListBudget {
-					break
-				}
-				out["truncated"] = true
-				if len(list) > 1 {
-					list = list[:max(1, len(list)/2)]
-					out["members"] = list
-					out["has_more"] = true
-					out["next_before"] = list[len(list)-1]["id"]
-				} else if window.MaxChars > 1 {
-					window.MaxChars = max(1, window.MaxChars/2)
-					body, total, next := textWindow(p.Body, window)
-					out["body"] = body
-					out["body_truncated"] = next < total
-					if next < total {
-						out["next_offset"] = next
-					}
-				} else {
-					return actool.Errorf("摘要元数据超出响应预算"), nil
-				}
-			}
 			return jsonResult(out)
 		})
 }

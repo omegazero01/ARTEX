@@ -10,8 +10,6 @@ import (
 	"strings"
 )
 
-const toolListBudget = 24000
-
 // ProjectToolDetail shares the domain tools' lossless continuation protocol with
 // host tools. The limit includes JSON escaping and continuation metadata.
 type toolDetailRequest struct {
@@ -53,22 +51,7 @@ func ProjectToolDetail(value any, input json.RawMessage) (map[string]any, error)
 	if err != nil {
 		return nil, err
 	}
-	for {
-		out, err := projectDetail(value, a.detailWindow, a.Field, a.Index)
-		if err != nil {
-			return nil, err
-		}
-		// projectDetail has normalized every value through JSON decoding; this
-		// map contains only JSON values and cannot fail to marshal.
-		raw, _ := json.Marshal(out)
-		if len([]rune(string(raw))) <= toolListBudget {
-			return out, nil
-		}
-		if a.MaxChars == 1 {
-			return nil, fmt.Errorf("字段路径或元数据超出工具响应预算")
-		}
-		a.MaxChars = max(1, a.MaxChars/2)
-	}
+	return projectDetail(value, a.detailWindow, a.Field, a.Index)
 }
 
 func textWindow(text string, w detailWindow) (string, int, int) {
@@ -230,9 +213,6 @@ func projectDetail(value any, w detailWindow, field string, index int) (map[stri
 		if len(rows) > 0 && used+size > w.MaxChars {
 			break
 		}
-		if size > toolListBudget-512 {
-			return nil, fmt.Errorf("字段路径超出工具响应预算")
-		}
 		rows = append(rows, row)
 		used += size
 		next++
@@ -251,13 +231,5 @@ func escapePointer(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
 }
 func budgetRows(rows []map[string]any) ([]map[string]any, bool) {
-	size := 256
-	for i, row := range rows {
-		b, _ := json.Marshal(row)
-		size += len([]rune(string(b))) + 1
-		if size > toolListBudget {
-			return rows[:i], true
-		}
-	}
 	return rows, false
 }

@@ -292,11 +292,11 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 
 **每次唤醒的决策流程**：
 
-1. **轻量图引导已附在本轮输入**：任务身份、授权可见的分类/状态计数、本轮事件及少量相关记录，不自动提供完整图列表。
-   - 依据任务目标、本轮事件和已提供信息直接判断下一步；信息不足时再按需用 context_search / context_get 补全。检索不是下发的固定前置步骤；缺少展示不等于不存在，不要默认读取全量。
+1. **历史进度不在本轮输入里**：本轮只带任务目标、触发事件和工具说明，不预载意图、资产或探索图。
+   - 下发前先按需用 context_search / context_get 查询已有意图、资产和探索图，确认方向不重复、不遗漏；信息足够后提交。缺少展示不等于不存在，查询失败要说明缺口，不要凭猜测造重复方向。
    - 仅使用本任务及直接关联任务的授权可见内容；来源记录只读，source_task_id 不是额外跨任务权限。
    - 对负面或存疑事实，读取 /evidence 核实手段及 confidence；必要时只派一次复核，避免反复验证已确认的否定结论。
-   - 已有信息足以确定可执行方向时，直接用 add_intent 提交，无需先查询意图或资产。结合已知的排队、运行及历史方向避免重复；仅在信息不足、需要确认历史进度或资产身份时按需读取。has_more 仅表示结果未展示完，不要求提交前查完分页。
+   - 结合已知的排队、运行及历史方向避免重复；信息不足、需要确认历史进度或资产身份时按需读取。has_more 仅表示结果未展示完，按需续页即可。
    - 已知且当前可用的资产 ID 直接用于 add_intent.asset_ids；仅资产身份不明确时用 asset_search，缺少详细字段时才用 asset_get。优先复用已知授权信息，不重复查询相同内容。
    - 本轮输入同时可能附有【graph_overview】有界窗口（设置里可选完整/精简）；窗口内的字段同样不是全量，缺展示按需检索。
 
@@ -326,6 +326,8 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
    - **parent_ids**：本方向由哪些上游节点综合得出（可选，0/1/多个）——只能填写 fact/finding 探索节点 ID，不能填写意图/目标/提示或独立 finding_id；多个事实共同支撑就都传，顶层全新方向留空。
 
 不重复、不硬凑；但目标未达成、又有未覆盖且更深的打法时，该派就派。简洁、聚焦、高效。`
+
+const plannerQueryRule = "\n【先查后建】下发意图前先查询已有意图、资产和探索图，确认方向不重复、不遗漏；信息不足时先检索再下发，不许凭猜测造重复方向。"
 
 func plannerSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("planner", plannerDefaultTmpl, PlannerVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
@@ -432,10 +434,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, g *
 		focus = &f
 		overview = tsx.expandOverviewFacts(overviewBase, *focus, config.LimitsFor(profile))
 	}
-	// 上游 05c8e90 的轻量图引导（规划前强制 context_search 查询）与本地
-	// 完整/精简态势窗口并存：bootstrap 给事件计数、相关记录和读取入口，
-	// graph_overview 给可配置的本轮态势窗口。
-	situational := cancelled + tsx.plannerBootstrap(ctx, triggers) + renderPlannerOverview(overview, profile, OverviewRenderOptions{
+	situational := cancelled + renderPlannerOverview(overview, profile, OverviewRenderOptions{
 		Config: config,
 		Focus:  focus,
 		Base:   overviewBase,
@@ -452,7 +451,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, g *
 	}
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	ctx = intercept.WithReviewContext(ctx, taskDir, intercept.ReviewBackground{})
-	sysBody := plannerSystem(goal, p.workDir, taskDir) + plannerRetrievalRule
+	sysBody := plannerSystem(goal, p.workDir, taskDir) + plannerQueryRule
 	sysBody += "\n任务资产清单不自动预载，需要管理详情时才按需分页调用 list_task_assets。可见不等于可测：只对当前任务范围内的资产下发意图，不要每轮查询全部资产。"
 	if p.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,框定探索边界
@@ -526,7 +525,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, g *
 	enableNoa(&opts, p.noaEnabledFn, p.workDir, noaSession, noaWarn(noaSession))
 	// 自定义上下文线（清理/摘要），未配置时保持内置窗口推导。
 	applyContextPolicy(&opts, p.ctxPolicyFn, p.compactionWindow())
-	lead := "本轮有变动；结合图引导中的事件与相关记录判断下一步，信息不足时再按需补全。"
+	lead := "本轮有变动；结合触发事件与按需检索到的记录判断下一步。"
 	if len(triggers) == 0 {
 		lead = "本轮没有具体节点变动信号；依据已有目标与上下文规划或等待，仅在缺少关键信息时按需读取。心跳相关记录可用于监督，未展示不代表不存在。"
 		// 回滚 05c8e90：心跳到点且已无 open/running 意图时，明确要求本轮补出方向，
@@ -591,3 +590,7 @@ func renderUserCancelledIntents(ts *db.ExplorationStore) (string, error) {
 	}
 	return b.String(), nil
 }
+
+// SetTaskContextReadAccess 保留调用接口：ARTEX 原版没有规划器图引导注入，
+// 不再需要预置读取策略；读取能力仍由工具绑定控制。
+func SetTaskContextReadAccess(ctx context.Context, p ContextAccess, searchEnabled bool) {}

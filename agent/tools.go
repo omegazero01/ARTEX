@@ -2945,26 +2945,15 @@ func (t *ToolSet) getWorkerTrace() actool.CoreTool {
 					}
 					row := map[string]any{"step_id": a.ID, "kind": a.Kind, "tool": a.Tool, "is_error": a.IsError}
 					window := in.detailWindow
-					budget := (toolListBudget - 512) / len(in.StepIDs)
-					for {
-						part, total, next := textWindow(a.Detail, window)
-						row["detail"] = part
-						row["total_chars"] = total
-						row["truncated"] = next < total
-						row["offset"] = in.Offset
-						if next < total {
-							row["next_offset"] = next
-						} else {
-							delete(row, "next_offset")
-						}
-						data, _ := json.Marshal(row)
-						if len([]rune(string(data))) <= budget {
-							break
-						}
-						if window.MaxChars <= 1 {
-							return actool.Errorf("步骤元数据超出预算"), nil
-						}
-						window.MaxChars = max(1, window.MaxChars/2)
+					part, total, next := textWindow(a.Detail, window)
+					row["detail"] = part
+					row["total_chars"] = total
+					row["truncated"] = next < total
+					row["offset"] = in.Offset
+					if next < total {
+						row["next_offset"] = next
+					} else {
+						delete(row, "next_offset")
 					}
 					if a.Inherited {
 						inheritedMap(row, a.SourceTaskID)
