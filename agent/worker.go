@@ -250,7 +250,6 @@ func proxyEnv(proxyAddr, caCert string) []string {
 		"HTTP_PROXY="+proxyAddr, "HTTPS_PROXY="+proxyAddr,
 		"http_proxy="+proxyAddr, "https_proxy="+proxyAddr,
 		"ALL_PROXY="+proxyAddr, "all_proxy="+proxyAddr, // socks5 egress: curl reads only this
-		"NO_PROXY=", "no_proxy=", // task targets (including loopback) must not bypass the policy proxy
 		"NODE_USE_ENV_PROXY=1", // Node 24+: honor HTTP(S)_PROXY in built-in fetch/http
 	)
 	if caCert != "" {
