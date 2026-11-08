@@ -317,6 +317,116 @@ func (d *DB) MigratePentestListAssetsBinding() error {
 	return err
 }
 
+// MigratePentestContextGetBinding 给存在的 pentest 角色补绑 context_get。
+// 旧库的 MigrateContextTools 只按退役旧工具的绑定推导新工具，pentest 从没有
+// node_detail 等旧工具，因此漏掉了 context_get；新库由默认种子直接带上。
+func (d *DB) MigratePentestContextGetBinding() error {
+	const flag = "pentest_context_get_binding_v1"
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`SELECT pg_advisory_xact_lock(719047221)`); err != nil {
+		return err
+	}
+	var done bool
+	if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM settings WHERE key=$1 AND value='true')`, flag).Scan(&done); err != nil {
+		return err
+	}
+	if done {
+		return tx.Commit()
+	}
+	if _, err = tx.Exec(`UPDATE tools SET agents = agents || '["pentest"]'::jsonb WHERE key='context_get' AND system AND NOT (agents ? 'pentest')`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`INSERT INTO settings(key,value) VALUES($1,'true') ON CONFLICT(key) DO UPDATE SET value='true'`, flag); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// MigratePentestContextDetailCap 给 pentest 补 detail 读取能力：context_get
+// 的默认视图是 detail，没有该权限时读正文会被拒绝（context_search 也不会
+// 返回可直接读取的 read 引用）。老库的上下文能力表由旧工具推导，pentest
+// 原版只有 list_findings（finding），因此漏了 detail。
+func (d *DB) MigratePentestContextDetailCap() error {
+	const flag = "pentest_context_detail_cap_v1"
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`SELECT pg_advisory_xact_lock(719047221)`); err != nil {
+		return err
+	}
+	var done bool
+	if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM settings WHERE key=$1 AND value='true')`, flag).Scan(&done); err != nil {
+		return err
+	}
+	if done {
+		return tx.Commit()
+	}
+	var raw string
+	err = tx.QueryRow(`SELECT value FROM settings WHERE key=$1`, ContextCapabilitiesSetting).Scan(&raw)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == nil {
+		var caps map[string]struct {
+			Local []string `json:"local"`
+			Cross []string `json:"cross"`
+		}
+		if err = json.Unmarshal([]byte(raw), &caps); err != nil {
+			return err
+		}
+		p := caps["pentest"]
+		if !slices.Contains(p.Local, "detail") {
+			p.Local = append(p.Local, "detail")
+		}
+		caps["pentest"] = p
+		b, _ := json.Marshal(caps)
+		if _, err = tx.Exec(`UPDATE settings SET value=$2 WHERE key=$1`, ContextCapabilitiesSetting, string(b)); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(`INSERT INTO settings(key,value) VALUES($1,'true') ON CONFLICT(key) DO UPDATE SET value='true'`, flag); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// MigrateRestoreOriginalCleanup 清掉两处已失效的残留：旧提示词迁移扫描报告
+// （每次启动重复打印过期结论）和禁报功能被删后遗留的工具行。
+func (d *DB) MigrateRestoreOriginalCleanup() error {
+	const flag = "restore_original_cleanup_v1"
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`SELECT pg_advisory_xact_lock(719047221)`); err != nil {
+		return err
+	}
+	var done bool
+	if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM settings WHERE key=$1 AND value='true')`, flag).Scan(&done); err != nil {
+		return err
+	}
+	if done {
+		return tx.Commit()
+	}
+	if _, err = tx.Exec(`DELETE FROM settings WHERE key='tool_context_prompt_migration_report'`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM tools WHERE key='list_finding_deletion_feedback' AND system`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`INSERT INTO settings(key,value) VALUES($1,'true') ON CONFLICT(key) DO UPDATE SET value='true'`, flag); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (d *DB) migratePlannerContextRead(flag, toolKey string) error {
 	tx, err := d.Begin()
 	if err != nil {

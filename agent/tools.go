@@ -1953,13 +1953,13 @@ func intentInputSchema() map[string]any {
 	for k, v := range fields {
 		props[k] = v
 	}
-	props["intents"] = map[string]any{"type": "array", "maxItems": 4, "description": "优先批量，1..4条；非空时仅处理数组，忽略顶层单条字段。ids/errors/duplicates与输入同序。", "items": obj(fields)}
+	props["intents"] = map[string]any{"type": "array", "description": "优先批量，1条以上；非空时仅处理数组，忽略顶层单条字段。ids/errors/duplicates与输入同序。", "items": obj(fields)}
 	return obj(props)
 }
 
 func (t *ToolSet) addIntent() actool.CoreTool {
 	return submissionTool{writeTool("add_intent", "生成【探索方向】写入 frontier，并连入探索链路。意图是开放的探索方向，不是固定类型——用 summary 一句话自由描述要探索/验证/利用什么。\n"+
-		"主 Agent 成功下发后结束本轮，Worker 自动回传总结，不轮询等待。Planner 信息足够时直接提交意图，无需先查询意图或资产；仅在信息不足时按需检索，结合已知方向及数据库去重避免重复。删除与任务隔离的限制仍然拒绝。★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（最多 4 条，比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors；已存在的活跃同方向见 duplicates）。单条则省略 intents 直接给顶层 summary。",
+		"主 Agent 成功下发后结束本轮，Worker 自动回传总结，不轮询等待。Planner 信息足够时直接提交意图，无需先查询意图或资产；仅在信息不足时按需检索，结合已知方向及数据库去重避免重复。删除与任务隔离的限制仍然拒绝。★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors；已存在的活跃同方向见 duplicates）。单条则省略 intents 直接给顶层 summary。",
 		intentInputSchema(),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			t := t
@@ -1982,9 +1982,6 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 			items := a.Intents
 			if !batch {
 				items = []intentItem{a.intentItem}
-			}
-			if len(items) > 4 {
-				return actool.Errorf("一轮最多新增 4 条意图；请只保留最高价值且互不重复的方向"), nil
 			}
 
 			if t == nil || t.ts == nil {

@@ -41,14 +41,14 @@ func TestWorkerLocalToolsExcludePollingSleep(t *testing.T) {
 	}
 }
 
-func TestAddIntentRejectsBatchOverFourBeforeWriting(t *testing.T) {
+func TestAddIntentAcceptsBatchOverFour(t *testing.T) {
 	input := json.RawMessage(`{"intents":[{"summary":"1"},{"summary":"2"},{"summary":"3"},{"summary":"4"},{"summary":"5"}]}`)
 	result, err := (&ToolSet{}).addIntent().Call(context.Background(), input, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.IsError || !strings.Contains(result.Flatten(), "最多新增 4 条") {
-		t.Fatalf("oversized batch result = error:%v text:%q", result.IsError, result.Flatten())
+	if strings.Contains(result.Flatten(), "最多新增 4 条") {
+		t.Fatalf("批量条数不应再被硬限制: %q", result.Flatten())
 	}
 }
 

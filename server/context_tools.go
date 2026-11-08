@@ -274,6 +274,37 @@ func loadContextAccess(pg *db.DB, role string) (agent.ContextAccess, error) {
 	return defaultContextAccess(role), nil
 }
 
+func refreshAddIntentToolDefinition(pg *db.DB) error {
+	const flag = "add_intent_no_batch_cap_v1"
+	var done bool
+	if err := pg.QueryRow(`SELECT EXISTS(SELECT 1 FROM settings WHERE key=$1 AND value='true')`, flag).Scan(&done); err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+	for _, seed := range agent.BuiltinToolSeeds() {
+		if seed.Key != "add_intent" {
+			continue
+		}
+		raw, err := json.Marshal(seed.Schema)
+		if err != nil {
+			return err
+		}
+		if _, err = pg.Exec(`UPDATE tools SET schema=$2::jsonb, updated_at=now()
+ WHERE key=$1 AND system AND schema @> '{"properties":{"intents":{"maxItems":4}}}'::jsonb`, seed.Key, string(raw)); err != nil {
+			return err
+		}
+		if _, err = pg.Exec(`UPDATE tools SET description=replace(description,'（最多 4 条，比逐条调用省往返）','（比逐条调用省往返）'), updated_at=now()
+ WHERE key=$1 AND system AND position('最多 4 条' in description)>0`, seed.Key); err != nil {
+			return err
+		}
+		break
+	}
+	_, err := pg.Exec(`INSERT INTO settings(key,value) VALUES($1,'true') ON CONFLICT(key) DO UPDATE SET value='true'`, flag)
+	return err
+}
+
 func migrateContextCatalog(pg *db.DB) error {
 	if e := pg.MigrateContextTools(); e != nil {
 		return e
@@ -291,6 +322,18 @@ func migrateContextCatalog(pg *db.DB) error {
 		return e
 	}
 	if e := pg.MigratePentestListAssetsBinding(); e != nil {
+		return e
+	}
+	if e := pg.MigratePentestContextGetBinding(); e != nil {
+		return e
+	}
+	if e := pg.MigratePentestContextDetailCap(); e != nil {
+		return e
+	}
+	if e := pg.MigrateRestoreOriginalCleanup(); e != nil {
+		return e
+	}
+	if e := refreshAddIntentToolDefinition(pg); e != nil {
 		return e
 	}
 	defaults := agent.BuiltinPromptSeeds()
