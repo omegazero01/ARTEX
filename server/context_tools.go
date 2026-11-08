@@ -287,6 +287,12 @@ func migrateContextCatalog(pg *db.DB) error {
 	if e := pg.MigratePlannerGraphReads(); e != nil {
 		return e
 	}
+	if e := pg.MigratePentestFindingPrompt(); e != nil {
+		return e
+	}
+	if e := pg.MigratePentestListAssetsBinding(); e != nil {
+		return e
+	}
 	defaults := agent.BuiltinPromptSeeds()
 	defaults["reporter"] = agent.ReporterDefaultPrompt
 	if err := pg.MigrateFindingReproductionPrompts(agent.ReporterDefaultPrompt); err != nil {

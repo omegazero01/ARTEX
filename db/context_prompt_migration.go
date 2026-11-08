@@ -25,6 +25,40 @@ func (d *DB) MigrateBuiltinPromptContracts(defaults map[string]string, hashes ma
 	return d.migratePromptContracts("tool_prompt_contracts_v2", "tool_prompt_contracts_report_v2", defaults, hashes)
 }
 
+const pentestFindingPromptMigration = "pentest_finding_prompt_v1"
+
+// MigratePentestFindingPrompt rewrites the retired list_findings instruction in
+// the pentest agent's current prompt. list_findings was replaced by
+// context_search; the rest of a custom prompt is preserved and this runs once.
+func (d *DB) MigratePentestFindingPrompt() error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`SELECT pg_advisory_xact_lock(719047221)`); err != nil {
+		return err
+	}
+	var done bool
+	if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM settings WHERE key=$1 AND value='true')`, pentestFindingPromptMigration).Scan(&done); err != nil {
+		return err
+	}
+	if done {
+		return tx.Commit()
+	}
+	const legacy = "回看已报漏洞用 list_findings。"
+	const replacement = "回看已报漏洞用 context_search（类型选 finding）。"
+	if _, err = tx.Exec(`UPDATE agent_prompts p SET template_text = replace(p.template_text, $1, $2)
+		FROM agents a
+		WHERE a.current_prompt_id = p.id AND a.key = 'pentest' AND position($1 in p.template_text) > 0`, legacy, replacement); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`INSERT INTO settings(key,value) VALUES($1,'true') ON CONFLICT(key) DO UPDATE SET value='true'`, pentestFindingPromptMigration); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (d *DB) migratePromptContracts(flag, reportKey string, defaults map[string]string, previousHashes map[string][]string) error {
 	tx, e := d.Begin()
 	if e != nil {

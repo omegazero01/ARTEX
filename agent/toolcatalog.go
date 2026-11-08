@@ -46,7 +46,7 @@ func builtinToolsByAgent() map[string][]actool.CoreTool {
 		"auto": {ts.contextSearch(), ts.contextGet(), ts.graphOverview(), ts.addFinding(), ts.insertAssets(), ts.addCompanyScope(), ts.assetSearch(), ts.assetGet(), ts.listCompanies()},
 		// pentest（独立渗透 agent）默认绑：查资产 / 插资产 / 报漏洞 / 查漏洞 / 查企业。
 		// 新库由此 seed 写入；老库由 seedPentestDefaultBindings 迁移。
-		"pentest": {ts.assetSearch(), ts.assetGet(), ts.insertAssets(), ts.addFinding(), ts.contextSearch(), ts.contextGet(), ts.listCompanies()},
+		"pentest": {ts.assetSearch(), ts.assetGet(), ts.insertAssets(), ts.addFinding(), ts.contextSearch(), ts.contextGet(), ts.listCompanies(), ts.listAssets()},
 	}
 }
 

@@ -296,6 +296,27 @@ func (d *DB) MigratePlannerIntentSearch() error {
 	return d.migratePlannerContextRead(plannerIntentSearchMigration, "context_search")
 }
 
+// MigratePentestListAssetsBinding restores the original ARTEX default that let
+// the solo pentest agent query registered assets with list_assets. It only adds
+// the agent key to an existing system tool row; a missing row is seeded later
+// with pentest in its default binding. One-shot and flag-guarded so a later
+// manual unbind is preserved.
+func (d *DB) MigratePentestListAssetsBinding() error {
+	const flag = "pentest_list_assets_binding_v1"
+	var done bool
+	if err := d.QueryRow(`SELECT EXISTS(SELECT 1 FROM settings WHERE key=$1 AND value='true')`, flag).Scan(&done); err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+	if err := d.AddAgentToToolBinding("pentest", []string{"list_assets"}); err != nil {
+		return err
+	}
+	_, err := d.Exec(`INSERT INTO settings(key,value) VALUES($1,'true') ON CONFLICT(key) DO UPDATE SET value='true'`, flag)
+	return err
+}
+
 func (d *DB) migratePlannerContextRead(flag, toolKey string) error {
 	tx, err := d.Begin()
 	if err != nil {
